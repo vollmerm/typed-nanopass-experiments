@@ -17,8 +17,15 @@ data Lamb   e = Lamb e
 data Apply  e = Apply e e
 data Var    e = Var Int
 data Let    e = Let e e
+data Fix    e = Fix (e (Fix e))
 
-cases cs = f where f (Fix e) = cs e f
+data (f :+: g) e = Inl (f e) | Inr (g e)
+
+(f <?> g) (Inl x) = f x
+(f <?> g) (Inr x) = g x
+
+
+
 
 -- This ugly type is inferred
 -- desugarDouble
@@ -32,27 +39,28 @@ desugarDouble e =
             Fix (inj (Plus (r e) (r e))))
          ? (const . Fix . fmap desugarDouble)) e
 
-inj1 :: Const e -> (((Times :+: Lang.Double) :+: Const) :+: Plus) e
+type L1 = (((Times :+: Lang.Double) :+: Const) :+: Plus)
+type L2 = ((Times :+: Const) :+: Plus)
+
+inj1 :: Const e -> L1 e
 inj1 = inj
 
-inj2 :: Lang.Double e -> (((Times :+: Lang.Double) :+: Const) :+: Plus) e
+inj2 :: Lang.Double e -> L1 e
 inj2 = inj
 
 c1 = Fix $ inj1 $ Const 2
 c2 = Fix $ inj2 $ Double c1
+
+-- Type is inferred
+-- c2' :: Fix L2
 c2' = desugarDouble c2 -- (+ 2 2)
---------------------------------------------------------------------------------------
 
-data (f :+: g) e = Inl (f e) | Inr (g e)
 
-(f <?> g) (Inl x) = f x
-(f <?> g) (Inr x) = g x
+
 
 instance (Functor f, Functor g) => Functor (f :+: g)
     where fmap f (Inl m) = Inl (fmap f m)
           fmap f (Inr m) = Inr (fmap f m)
-
-data Fix e = Fix (e (Fix e))
 
 instance (Show (f e), Show (g e)) => Show ((f :+: g) e) where
   show (Inl x) = show x -- "l" ++ show x
@@ -211,3 +219,5 @@ instance Without g h p => Without (f :+: g) h (Ri f p) where
 
 (?) :: forall f g e r. Without f g (Minus f g) => (g e -> r) -> (OutOf (Minus f g) e -> r) -> f e -> r
 m ? n = (??) m n (undefined :: Minus f g)
+
+cases cs = f where f (Fix e) = cs e f
