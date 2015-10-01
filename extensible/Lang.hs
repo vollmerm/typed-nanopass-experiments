@@ -21,19 +21,16 @@ data Fix    e = Fix (e (Fix e))
 
 data (f :+: g) e = Inl (f e) | Inr (g e)
 
-(f <?> g) (Inl x) = f x
-(f <?> g) (Inr x) = g x
-
 
 
 
 -- This ugly type is inferred
 -- desugarDouble
 --   :: (Functor (OutOf (Minus t Lang.Double)),
---             Without t Lang.Double (Minus t Lang.Double),
---             Inj Plus (OutOf (Minus t Lang.Double))
---             (Into Plus (OutOf (Minus t Lang.Double)))) =>
---           Fix t -> Fix (OutOf (Minus t Lang.Double))
+--       Without t Lang.Double (Minus t Lang.Double),
+--       Inj Plus (OutOf (Minus t Lang.Double))
+--           (Into Plus (OutOf (Minus t Lang.Double)))) =>
+--      Fix t -> Fix (OutOf (Minus t Lang.Double))
 desugarDouble e =
   cases ((\(Double e) r ->
             Fix (inj (Plus (r e) (r e))))
@@ -57,6 +54,9 @@ c2' = desugarDouble c2 -- (+ 2 2)
 
 
 
+
+(f <?> g) (Inl x) = f x
+(f <?> g) (Inr x) = g x
 
 instance (Functor f, Functor g) => Functor (f :+: g)
     where fmap f (Inl m) = Inl (fmap f m)
