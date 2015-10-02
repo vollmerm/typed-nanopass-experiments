@@ -39,14 +39,12 @@ desugarDouble e =
 type L1 = (((Times :+: Lang.Double) :+: Const) :+: Plus)
 type L2 = ((Times :+: Const) :+: Plus)
 
-inj1 :: Const e -> L1 e
-inj1 = inj
-
-inj2 :: Lang.Double e -> L1 e
-inj2 = inj
-
-c1 = Fix $ inj1 $ Const 2
-c2 = Fix $ inj2 $ Double c1
+c1 :: Fix L1
+c1 = Fix $ inj $ Const 2
+c2 :: Fix L1
+c2 = Fix $ inj $ Double c1
+c3 :: Fix L1
+c3 = Fix $ inj $ Plus c1 c2
 
 -- Type is inferred
 -- c2' :: Fix L2
