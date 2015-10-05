@@ -50,8 +50,24 @@ c3 = Fix $ inj $ Plus c1 c2
 -- c2' :: Fix L2
 c2' = desugarDouble c2 -- (+ 2 2)
 
+type L3 = ((((((Apply :+: Var) :+: Lamb) :+: Let) :+: Times) :+: Const) :+: Plus)
+type L4 = (((((Apply :+: Var) :+: Lamb) :+: Times) :+: Const) :+: Plus)
 
+c4 :: Fix L3
+c4 = Fix $ inj $ Let (Fix $ inj $ Const 1) (Fix $ inj $ Var 0)
 
+c4' = desugarLet c4 -- ((lamba (var 0)) 1)
+
+-- desugarLet
+--   :: (Functor (OutOf (Minus t Let)), Without t Let (Minus t Let),
+--       Inj Apply (OutOf (Minus t Let)) (Into Apply (OutOf (Minus t Let))),
+--       Inj
+--         Lamb (OutOf (Minus t Let)) (Into Lamb (OutOf (Minus t Let)))) =>
+--      Fix t -> Fix (OutOf (Minus t Let))
+desugarLet e =
+  cases ((\(Let e1 e2) r ->
+            Fix $ inj $ Apply (Fix $ inj $ Lamb (r e2)) (r e1))
+         ? (const . Fix . fmap desugarLet)) e
 
 (f <?> g) (Inl x) = f x
 (f <?> g) (Inr x) = g x
