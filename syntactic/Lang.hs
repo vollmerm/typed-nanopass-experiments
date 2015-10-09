@@ -10,17 +10,17 @@
 
 module Lang where
 
-import           Prelude        hiding (length, map, max, min, not, sum, zip,
-                                 zipWith, (==))
+import           Prelude                   hiding (length, map, max, min, not,
+                                            sum, zip, zipWith, (==))
 import qualified Prelude
 
 import           Data.Tree
 import           Data.Typeable
 
-import           Data.Syntactic hiding (drawAST, fold, printExpr, showAST,
-                                 writeHtmlAST)
-import qualified Data.Syntactic as Syntactic
--- import           Data.Syntactic.Functional
+import           Data.Syntactic            hiding (drawAST, fold, printExpr,
+                                            showAST, writeHtmlAST)
+import qualified Data.Syntactic            as Syntactic
+import           Data.Syntactic.Functional
 -- import           Data.Syntactic.Sugar.BindingT ()
 
 class    (Typeable a, Show a, Eq a, Ord a) => Type a
@@ -42,11 +42,11 @@ data Let sig
 data Bind sig
   where
     Lamb :: Bind (a :-> Full a)
-    Var  :: Bind (Int :-> Full a)
+    Vare :: Bind (Int :-> Full a)
 
-type L1 = Arithmetic :+: Arithmetic' :+: Let :+: Bind
-type L2 = Arithmetic :+: Let :+: Bind
-type L3 = Arithmetic :+: Bind
+type L1 = Construct :+: Arithmetic :+: Arithmetic' :+: Let :+: Bind
+type L2 = Construct :+: Arithmetic :+: Let :+: Bind
+type L3 = Construct :+: Arithmetic :+: Bind
 
 instance Symbol Arithmetic
   where
@@ -79,10 +79,11 @@ instance Render Let
 instance Symbol Bind
   where
     symSig Lamb = signature
-    symSig Var = signature
+    symSig Vare = signature
 
 instance Render Bind
   where
     renderSym Lamb = "lamb"
-    renderSym Var = "var"
+    renderSym Vare = "var"
 
+value a = sugar $ inj $ Construct (show a) a
