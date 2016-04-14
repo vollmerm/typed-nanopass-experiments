@@ -52,6 +52,25 @@ instance Functor Apl where
 instance Functor Let where
     fmap f (Let a b) = Let (f a) (f b)
 
+instance (Show (f e), Show (g e)) => Show ((f :+: g) e) where
+    show (L a) = show a
+    show (R b) = show b
+
+instance Show (e (Fix e)) => Show (Fix e) where
+    show (In x) = show x
+
+instance Show f => Show (Val f) where
+    show (Val v) = show v
+
+instance Show f => Show (Add f) where
+    show (Add a b) = "(" ++ show a ++ " + " ++ show b ++ ")"
+
+instance Show f => Show (Mul f) where
+    show (Mul a b) = "(" ++ show a ++ " * " ++ show b ++ ")"
+
+instance Show f => Show (Dub f) where
+    show (Dub e) = "(double " ++ show e ++ ")"
+
 fold :: Functor f => (f b -> b) -> Fix f -> b
 fold f = go
     where go (In t) = f . fmap go $ t
@@ -65,7 +84,8 @@ instance (Functor f) => f :<: f where
 instance (Functor f, Functor g) => f :<: (f :+: g) where
     inj = L
 
-instance (Functor h, f :<: g) => f :<: (h :+: g) where
+instance (Functor f, Functor g, Functor h, f :<: g)
+    => f :<: (h :+: g) where
     inj = R . inj
 
 inject :: (g :<: f) => g (Fix f) -> Fix f
