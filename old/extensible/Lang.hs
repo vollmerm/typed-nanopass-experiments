@@ -1,3 +1,4 @@
+{-# LANGUAGE PartialTypeSignatures #-}
 {-# LANGUAGE FlexibleContexts      #-}
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
@@ -8,6 +9,8 @@
 {-# LANGUAGE UndecidableInstances  #-}
 
 module Lang where
+
+import GHC.Exts (Constraint)
 
 data Double e = Double e
 data Plus   e = Plus e e
@@ -25,16 +28,20 @@ data (f :+: g) e = Inl (f e) | Inr (g e)
 
 
 -- This ugly type is inferred
--- desugarDouble
---   :: (Functor (OutOf (Minus t Lang.Double)),
---       Without t Lang.Double (Minus t Lang.Double),
---       Inj Plus (OutOf (Minus t Lang.Double))
---           (Into Plus (OutOf (Minus t Lang.Double)))) =>
---      Fix t -> Fix (OutOf (Minus t Lang.Double))
-desugarDouble e =
-  cases ((\(Double e) r ->
-            Fix (inj (Plus (r e) (r e))))
-         ? (const . Fix . fmap desugarDouble)) e
+desugarDouble
+  :: (Functor (OutOf (Minus t Lang.Double)),
+      Without t Lang.Double (Minus t Lang.Double),
+      Inj Plus (OutOf (Minus t Lang.Double))
+          (Into Plus (OutOf (Minus t Lang.Double)))) =>
+     Fix t -> Fix (OutOf (Minus t Lang.Double))
+-- desugarDouble :: _ => Fix t -> Fix (OutOf (Minus t Lang.Double))
+desugarDouble = cases
+  $ (\(Double e) r -> r e .+ r e)
+  ? boiler
+
+(.+) :: Inj Plus e (Into Plus e) => Fix e -> Fix e -> Fix e
+a .+ b = Fix $ inj $ Plus a b
+infixl 6 .+
 
 type L1 = (((Times :+: Lang.Double) :+: Const) :+: Plus)
 type L2 = ((Times :+: Const) :+: Plus)
@@ -128,6 +135,7 @@ instance Functor Var where
 instance Functor Apply where
   fmap f (Apply x y) = Apply (f x) (f y)
 
+type family Fail :: Constraint where
 
 data Yep
 data Nope
@@ -150,6 +158,8 @@ data L x
 data R x
 data S x y
 data End
+
+
 
 type family Into f g where
   Into f f         = End
@@ -234,4 +244,14 @@ instance Without g h p => Without (f :+: g) h (Ri f p) where
 (?) :: forall f g e r. Without f g (Minus f g) => (g e -> r) -> (OutOf (Minus f g) e -> r) -> f e -> r
 m ? n = (??) m n (undefined :: Minus f g)
 
+cases :: (u (Fix u) -> (Fix u -> t) -> t) -> Fix u -> t
 cases cs = f where f (Fix e) = cs e f
+
+boiler :: Functor t => t a -> (a -> Fix t) -> Fix t
+boiler e f = Fix $ f <$> e
+
+{-
+cases_ :: (_ -> u (Fix u) -> (Fix u -> t) -> t) -> Fix u -> t
+cases_ cs = 
+-}
+
