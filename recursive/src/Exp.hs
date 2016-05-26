@@ -1,68 +1,118 @@
-{-# LANGUAGE PatternGuards #-}
-{-# LANGUAGE PartialTypeSignatures #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveFoldable #-}
 {-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE PolyKinds #-}
+{-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE LambdaCase #-}
 
 module Exp where
 
+import Variants
+
+import Control.Arrow
+import Control.Monad
+import Type.Family.Constraint
+import Type.Family.List
+import Data.Type.Index
+
+data LamF r a where
+  Var :: a -> LamF r a
+  Lam :: (a -> r b) -> LamF r (a -> b)
+  App :: r (a -> b) -> r a -> LamF r b
+
+var :: (LamF ∈ fs) => a -> Rec fs a
+var x = injRec $ Var x
+
+lam :: (LamF ∈ fs) => (a -> Rec fs b) -> Rec fs (a -> b)
+lam f = injRec $ Lam f
+
+app :: (LamF ∈ fs) => Rec fs (a -> b) -> Rec fs a -> Rec fs b
+app f a = injRec $ App f a
+
+data LetF r a where
+  Let :: r a -> (a -> r b) -> LetF r b
+
+let_ :: (LetF ∈ fs) => Rec fs a -> (a -> Rec fs b) -> Rec fs b
+let_ a f = injRec $ Let a f
+
+data IfF r a where
+  If :: r Bool -> r a -> r a -> IfF r a
+
+if_ :: (IfF ∈ fs) => Rec fs Bool -> Rec fs a -> Rec fs a -> Rec fs a
+if_ t c a = injRec $ If t c a
+
+data NumF r a where
+  Int    :: Int -> NumF r a
+  Add    :: r Int -> r Int -> NumF r Int
+  IsZero :: r Int -> NumF r Bool
+
+int :: (NumF ∈ fs) => Int -> Rec fs Int
+int i = injRec $ Int i
+
+(.+) :: (NumF ∈ fs) => Rec fs Int -> Rec fs Int -> Rec fs Int
+x .+ y = injRec $ Add x y
+infixl 6 .+
+
+isZero :: (NumF ∈ fs) => Rec fs Int -> Rec fs Bool
+isZero a = injRec $ IsZero a
+
+data DubF r a where
+  Dub :: r Int -> DubF r Int
+
+dub :: (DubF ∈ fs) => Rec fs Int -> Rec fs Int
+dub a = injRec $ Dub a
+
+type L1 = '[DubF,LamF,LetF,IfF,NumF]
+type L2 = '[LamF,LetF,IfF,NumF]
+type L3 = '[LamF,IfF,NumF]
+
+type Exp1 = Rec L1
+type Exp2 = Rec L2
+type Exp3 = Rec L3
+
+case_ :: Rec fs a -> (Rec fs a -> b) -> b
+case_ t f = f t
+
+(?) :: (f ∈ fs) => (f (Rec fs) a -> b) -> (Rec fs a -> b) -> Rec fs a -> b
+(f ? g) t = case prjRec t of
+  Just u -> f u
+  _      -> g t
+infixr 0 ?
+
+recursive :: (HFoldables fs, f ∈ fs) => (f (Rec fs) a -> b) -> Rec fs a -> b
+recursive f t = case prjRec t of
+  Just u -> f u
+  _      -> hfoldMap (recursive f) $ unroll t
+
 {-
-import Control.Arrow
-import Control.Monad.Reader
-import Control.Monad.State
-import Control.Monad.Writer
-import Control.Monad.RWS
-import Control.Comonad
-import Data.Functor.Identity
-import Data.Map (Map)
-import qualified Data.Map as Map
-import Data.Set (Set)
-import qualified Data.Set as Set
-import Data.Maybe (fromMaybe,mapMaybe)
-import Data.Monoid ((<>))
-import qualified Data.Foldable as F
-import Debug.Trace
+(?!) :: (HFoldables fs, f ∈ fs) => (f (Rec fs) a -> b) -> (forall g. HFoldable g => g (Rec fs) a -> b) -> Rec fs a -> b
+(f ?! g) t = case prjRec t of
+  Just u -> f u
+  _      -> hfoldMap _ $ unroll t
+infixr 0 ?!
 -}
-import Control.Arrow
-import Control.Comonad
-import Data.Functor.Sum
-import Control.Comonad.Cofree
 
--- Rec {{{
+(&) :: a -> (a -> b) -> b
+a & f = f a
+infixr 0 &
 
-data Rec f = Roll { unroll :: f (Rec f) }
+desugarDub :: Exp1 a -> Exp2 a
+desugarDub =
+    (\(Dub x) -> desugarDub x .+ desugarDub x)
+  ? (_)
 
-deriving instance Eq   (f (Rec f)) => Eq   (Rec f)
-deriving instance Ord  (f (Rec f)) => Ord  (Rec f)
-deriving instance Show (f (Rec f)) => Show (Rec f)
-
-cataRec :: Functor f => (f a -> a) -> Rec f -> a
-cataRec f = f . fmap (cataRec f) . unroll
-
-paraRec :: Functor f => (f (Rec f,a) -> a) -> Rec f -> a
-paraRec f = f . fmap (id &&& paraRec f) . unroll
-
-annotate :: Functor f => (f (Rec f,a) -> a) -> Rec f -> Cofree f a
-annotate f = paraRec $ (:<) <$> f . fmap (second extract) <*> fmap snd
-
-annotate_ :: Functor f => (f a -> a) -> Rec f -> Cofree f a
-annotate_ f = paraRec $ (:<) <$> f . fmap (extract . snd) <*> fmap snd
-
-cataCofree :: Functor f => (a -> f b -> b) -> Cofree f a -> b
-cataCofree f (a :< as) = f a $ fmap (cataCofree f) as
-
-open :: Functor f => Rec f -> Cofree f ()
-open = cataRec (() :<) 
-
-close :: Functor f => Cofree f a -> Rec f
-close = cataCofree $ const Roll
-
--- }}}
+{-
 
 -- types {{{
 
@@ -137,7 +187,6 @@ infixl 8 .@
 
 -- }}}
 
-{-
 -- typecheck {{{
 
 data Type
