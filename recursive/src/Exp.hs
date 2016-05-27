@@ -1,3 +1,5 @@
+{-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveFoldable #-}
 {-# LANGUAGE DeriveTraversable #-}
@@ -53,12 +55,28 @@ if_ :: (IfF ∈ fs) => Rec fs Bool -> Rec fs a -> Rec fs a -> Rec fs a
 if_ t c a = injRec $ If t c a
 
 data NumF r a where
-  Int    :: Int -> NumF r a
+  Int    :: Int -> NumF r Int
   Add    :: r Int -> r Int -> NumF r Int
   IsZero :: r Int -> NumF r Bool
 
 int :: (NumF ∈ fs) => Int -> Rec fs Int
 int i = injRec $ Int i
+
+pattern INT :: (a ~ Int) => (NumF ∈ fs) => Int -> Rec fs a
+pattern INT i <- (prjRec -> Just (Int i))
+  where
+  INT i = injRec $ Int i
+
+pattern (:+:) :: (a ~ Int) => (NumF ∈ fs) => Rec fs Int -> Rec fs Int -> Rec fs a
+pattern x :+: y <- (prjRec -> Just (Add x y))
+  where
+  x :+: y = injRec $ Add x y
+infixl 6 :+:
+
+pattern ISZERO :: (a ~ Bool) => (NumF ∈ fs) => Rec fs Int -> Rec fs a
+pattern ISZERO a <- (prjRec -> Just (IsZero a))
+  where
+  ISZERO a = injRec $ IsZero a
 
 (.+) :: (NumF ∈ fs) => Rec fs Int -> Rec fs Int -> Rec fs Int
 x .+ y = injRec $ Add x y
@@ -69,6 +87,11 @@ isZero a = injRec $ IsZero a
 
 data DubF r a where
   Dub :: r Int -> DubF r Int
+
+pattern DUB :: (a ~ Int) => (DubF ∈ fs) => Rec fs Int -> Rec fs a
+pattern DUB a <- (prjRec -> Just (Dub a))
+  where
+  DUB a = injRec $ Dub a
 
 dub :: (DubF ∈ fs) => Rec fs Int -> Rec fs Int
 dub a = injRec $ Dub a
@@ -108,9 +131,15 @@ a & f = f a
 infixr 0 &
 
 desugarDub :: Exp1 a -> Exp2 a
-desugarDub =
-    (\(Dub x) -> desugarDub x .+ desugarDub x)
-  ? (_)
+desugarDub = \case
+  DUB x -> desugarDub x :+: desugarDub x
+  e     -> undefined
+
+{-
+foo :: (NumF ∈ fs) => Rec fs a -> Maybe (Rec fs Int)
+foo (a :+: b) = Just (a :+: b)
+foo _ = Nothing
+-}
 
 {-
 
