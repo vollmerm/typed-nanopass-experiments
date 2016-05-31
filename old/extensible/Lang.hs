@@ -1,3 +1,9 @@
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DeriveFoldable #-}
+{-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE NoMonomorphismRestriction #-}
+{-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE PartialTypeSignatures #-}
 {-# LANGUAGE FlexibleContexts      #-}
 {-# LANGUAGE FlexibleInstances     #-}
@@ -11,57 +17,105 @@
 module Lang where
 
 import GHC.Exts (Constraint)
+import Data.Function (fix)
 
-data Double e = Double e
-data Plus   e = Plus e e
-data Times  e = Times e e
-data Const  e = Const Int
-data Lamb   e = Lamb e
-data Apply  e = Apply e e
-data Var    e = Var Int
-data Let    e = Let e e
-data Fix    e = Fix (e (Fix e))
-
+data Term  e = Term (e (Term e))
 data (f :+: g) e = Inl (f e) | Inr (g e)
+  deriving (Eq,Ord,Functor,Foldable,Traversable)
+infixl 6 :+:
 
+instance Show (f (Term f)) => Show (Term f) where
+  showsPrec d (Term t) = showsPrec d t
 
+instance (Show (f a), Show (g a)) => Show ((f :+: g) a) where
+  showsPrec d = \case
+    Inl a -> showsPrec d a
+    Inr b -> showsPrec d b
 
+data Dub   e = Dub   e   deriving (Eq,Ord,Show,Functor,Foldable,Traversable)
+data Plus  e = Plus  e e deriving (Eq,Ord,Show,Functor,Foldable,Traversable)
+data Times e = Times e e deriving (Eq,Ord,Show,Functor,Foldable,Traversable)
+data Const e = Const Int deriving (Eq,Ord,Show,Functor,Foldable,Traversable)
+data Lamb  e = Lamb  e   deriving (Eq,Ord,Show,Functor,Foldable,Traversable)
+data Apply e = Apply e e deriving (Eq,Ord,Show,Functor,Foldable,Traversable)
+data Var   e = Var   Int deriving (Eq,Ord,Show,Functor,Foldable,Traversable)
+data Let   e = Let   e e deriving (Eq,Ord,Show,Functor,Foldable,Traversable)
 
--- This ugly type is inferred
-desugarDouble
-  :: (Functor (OutOf (Minus t Lang.Double)),
-      Without t Lang.Double (Minus t Lang.Double),
-      Inj Plus (OutOf (Minus t Lang.Double))
-          (Into Plus (OutOf (Minus t Lang.Double)))) =>
-     Fix t -> Fix (OutOf (Minus t Lang.Double))
--- desugarDouble :: _ => Fix t -> Fix (OutOf (Minus t Lang.Double))
-desugarDouble = cases
-  $ (\(Double e) r -> r e .+ r e)
-  ? boiler
+type Member f g = Inj f g (Into f g)
+type Remove g f h = (Without f g (Minus f g), h ~ OutOf (Minus f g))
+type f \\ g = OutOf (Minus f g)
+type RequireIn g f = (Without f g (Minus f g), Member g f)
 
-(.+) :: Inj Plus e (Into Plus e) => Fix e -> Fix e -> Fix e
-a .+ b = Fix $ inj $ Plus a b
+-- $ (\(Dub e1) r1 -> casesOf e1
+--   $ (\(Plus e2 e3) r2 ->
+--     r1 e2 .+ r1 e3
+-- desugarDub ::
+--   ( Remove Plus u v
+--   , Member Plus   v
+--   , Remove Dub  u v
+--   , Functor       v
+--   ) => Term u -> Term v
+
+-- $ (\(Dub e1) r1 -> casesOf (r1 e1)
+--   $ (\(Plus e2 e3) r2 ->
+--     r2 e2 .+ r2 e3
+-- desugarDub ::
+--   ( Remove Dub  u v
+--   , Remove Plus v v
+--   , Functor v
+--   , Member Plus v
+--   ) => Term u -> Term v
+-- r1 e2 .+ r2 e3
+--
+-- desugarDub :: forall u v w. 
+--   ( Remove Dub u v
+--   , Functor v
+--   , Remove Plus v w
+--   , Member Plus v
+--   ) => Term u -> Term v
+
+{-
+desugarDub :: forall u v.
+  ( Remove Dub u v
+  , RequireIn Plus v
+  , Functor v
+  ) => Term u -> Term v
+desugarDub e = casesOf e
+  $ (\(Dub e1) r1 -> casesOf (r1 e1)
+    $ (\(Plus e2 e3) r2 ->
+      r2 e2 .+ r2 e3
+      -- r2 e2 .+ r2 e3
+      -- r1 e2 .+ r2 e3
+      )
+    ? _
+    -- r e .+ r e
+    )
+  ? everywhere -- (undefined :: v (Term u) -> (Term u -> Term v) -> Term v)
+-}
+
+(.+) :: Member Plus e => Term e -> Term e -> Term e
+a .+ b = term $ Plus a b
 infixl 6 .+
 
-type L1 = (((Times :+: Lang.Double) :+: Const) :+: Plus)
-type L2 = ((Times :+: Const) :+: Plus)
+type L1 = Times :+: Dub :+: Const :+: Plus
+type L2 = Times :+: Const :+: Plus
 
-c1 :: Fix L1
-c1 = Fix $ inj $ Const 2
-c2 :: Fix L1
-c2 = Fix $ inj $ Double c1
-c3 :: Fix L1
-c3 = Fix $ inj $ Plus c1 c2
+c1 :: Term L1
+c1 = term $ Const 2
+c2 :: Term L1
+c2 = term $ Dub c1
+c3 :: Term L1
+c3 = term $ Plus c1 c2
 
 -- Type is inferred
--- c2' :: Fix L2
-c2' = desugarDouble c2 -- (+ 2 2)
+-- c2' :: Term L2
+-- c2' = desugarDub c2 -- (+ 2 2)
 
-type L3 = ((((((Apply :+: Var) :+: Lamb) :+: Let) :+: Times) :+: Const) :+: Plus)
-type L4 = (((((Apply :+: Var) :+: Lamb) :+: Times) :+: Const) :+: Plus)
+type L3 = Apply :+: Var :+: Lamb :+: Let :+: Times :+: Const :+: Plus
+type L4 = Apply :+: Var :+: Lamb :+: Times :+: Const :+: Plus
 
-c4 :: Fix L3
-c4 = Fix $ inj $ Let (Fix $ inj $ Const 1) (Fix $ inj $ Var 0)
+c4 :: Term L3
+c4 = term $ Let (term $ Const 1) (term $ Var 0)
 
 c4' = desugarLet c4 -- ((lamba (var 0)) 1)
 
@@ -70,72 +124,40 @@ c4' = desugarLet c4 -- ((lamba (var 0)) 1)
 --       Inj Apply (OutOf (Minus t Let)) (Into Apply (OutOf (Minus t Let))),
 --       Inj
 --         Lamb (OutOf (Minus t Let)) (Into Lamb (OutOf (Minus t Let)))) =>
---      Fix t -> Fix (OutOf (Minus t Let))
-desugarLet e =
-  cases ((\(Let e1 e2) r ->
-            Fix $ inj $ Apply (Fix $ inj $ Lamb (r e2)) (r e1))
-         ? (const . Fix . fmap desugarLet)) e
+--      Term t -> Term (OutOf (Minus t Let))
+desugarLet =
+  cases $ \r ->
+      (\(Let e1 e2) ->
+            term $ Apply (term $ Lamb (r e2)) (r e1))
+    ? (const . Term . fmap desugarLet)
+
+term :: Member f g => f (Term g) -> Term g
+term = Term . inj
+
+(?) :: forall f g h e r. Remove g f h => (g e -> r) -> (h e -> r) -> f e -> r
+m ? n = (??) m n (undefined :: Minus f g)
+infixr 0 ?
+
+cases :: ((Term u -> t) -> u (Term u) -> t) -> Term u -> t
+cases cs = fix $ \f (Term e) -> cs f e
+
+{-
+casesOf :: Term u -> ((Term u -> t) -> u (Term u) -> t) -> t
+casesOf e cs = cases cs e
+-}
+
+{-
+casesOf :: Term u -> ((Term u -> t) -> u (Term u) -> t) -> t
+casesOf t
+-}
+
+everywhere :: Functor t => t a -> (a -> Term t) -> Term t
+everywhere e f = Term $ f <$> e
+
+-- Machinery {{{
 
 (f <?> g) (Inl x) = f x
 (f <?> g) (Inr x) = g x
-
-instance (Functor f, Functor g) => Functor (f :+: g)
-    where fmap f (Inl m) = Inl (fmap f m)
-          fmap f (Inr m) = Inr (fmap f m)
-
-instance (Show (f e), Show (g e)) => Show ((f :+: g) e) where
-  show (Inl x) = show x -- "l" ++ show x
-  show (Inr x) = show x -- "r" ++ show x
-
-instance Show (e (Fix e)) => Show (Fix e) where
-  show (Fix x) = show x
-
-instance Show e => Show (Lang.Double e) where
-  show (Double e) = "(double " ++ show e ++ ")"
-
-instance Show e => Show (Plus e) where
-  show (Plus x y) = "(+ " ++ show x ++ " " ++ show y ++ ")"
-
-instance Show e => Show (Times e) where
-  show (Times x y) = "(* "  ++ show x ++ " " ++ show y ++ ")"
-
-instance Show (Const e) where
-  show (Const n) = show n
-
-instance Show e => Show (Lamb e) where
-  show (Lamb e) = "(lambda " ++ show e ++ ")"
-
-instance Show e => Show (Apply e) where
-  show (Apply a b) = "(" ++ show a ++ " " ++ show b ++ ")"
-
-instance Show e => Show (Var e) where
-  show (Var i) = "(var " ++ show i ++ ")"
-
-instance Functor Plus where
-  fmap f (Plus m n) = Plus (f m) (f n)
-
-instance Functor Times where
-  fmap f (Times m n) = Times (f n) (f n)
-
-instance Functor Const where
-  fmap _ (Const x) = Const x
-
-instance Functor Lang.Double where
-  fmap f (Double x) = Double (f x)
-
-instance Functor Let where
-  fmap f (Let x y) = Let (f x) (f y)
-
-instance Functor Lamb where
-  fmap f (Lamb x) = Lamb (f x)
-
-instance Functor Var where
-  fmap _ (Var v) = Var v
-
-instance Functor Apply where
-  fmap f (Apply x y) = Apply (f x) (f y)
-
-type family Fail :: Constraint where
 
 data Yep
 data Nope
@@ -183,6 +205,9 @@ type family Ifii p a q b s r where
   Ifii p Nope q b s r       = L p
   Ifii p a q b s r          = Nope
 
+inj :: forall f g e. Member f g => f e -> g e
+inj = inj' (undefined :: Into f g)
+
 class Inj f g p where
   inj' :: p -> f e -> g e
 
@@ -197,9 +222,6 @@ instance Inj f h p => Inj f (g :+: h) (R p) where
 
 instance (Inj f h s, Inj g h r) => Inj (f :+: g) h (S s r) where
   inj' (_ :: S s r) = inj' (undefined :: s) <?> inj' (undefined :: r)
-
-inj :: forall f g e. (Inj f g (Into f g)) => f e -> g e
-inj = inj' (undefined :: Into f g)
 
 data Onl (x :: * -> *)
 data Onr (x :: * -> *)
@@ -241,17 +263,5 @@ instance Without g h p => Without (f :+: g) h (Ri f p) where
   (m ?? n) (_ :: Ri f p) (Inl x) = n (Inl x)
   (m ?? n) (_ :: Ri f p) (Inr x) = (m ?? (n . Inr)) (undefined :: p) x
 
-(?) :: forall f g e r. Without f g (Minus f g) => (g e -> r) -> (OutOf (Minus f g) e -> r) -> f e -> r
-m ? n = (??) m n (undefined :: Minus f g)
-
-cases :: (u (Fix u) -> (Fix u -> t) -> t) -> Fix u -> t
-cases cs = f where f (Fix e) = cs e f
-
-boiler :: Functor t => t a -> (a -> Fix t) -> Fix t
-boiler e f = Fix $ f <$> e
-
-{-
-cases_ :: (_ -> u (Fix u) -> (Fix u -> t) -> t) -> Fix u -> t
-cases_ cs = 
--}
+-- }}}
 

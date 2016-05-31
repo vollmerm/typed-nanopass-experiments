@@ -10,9 +10,6 @@ extra-deps:
 - contravariant-1.4
 - distributive-0.5.0.2
 - hashable-1.2.4.0
-- haskell-lexer-1.0
-- mtl-2.2.1
-- pretty-show-1.6.10
 - profunctors-5.2
 - semigroups-0.18.1
 - stm-2.4.4.1

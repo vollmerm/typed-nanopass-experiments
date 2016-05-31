@@ -1,3 +1,4 @@
+{-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE PolyKinds #-}
@@ -22,6 +23,8 @@ import Type.Class.Witness
 import Type.Family.Constraint
 import Type.Family.List
 import Data.Type.Index
+import Data.Type.Length
+import Data.Function (fix)
 
 -- Variants {{{
 
@@ -40,8 +43,13 @@ deriving instance
 deriving instance ListC (Show <$> fs <&> r <&> a)
   => Show (Variants fs r a)
 
-none :: Variants Ø r a -> b
-none _ = error "impossible: Variants Ø"
+instance ListC (Functor <$> fs <&> r) => Functor (Variants fs r) where
+  fmap f = \case
+    L a -> L $ f <$> a
+    R b -> R $ f <$> b
+
+noVariants :: Variants Ø r a -> b
+noVariants _ = error "impossible: Variants Ø"
 
 data El (gs :: [k -> l -> *]) :: k -> l -> * where
   El :: !(Index gs f)
@@ -151,22 +159,33 @@ subRec = fmap Roll . (>>= htraverse subRec) . prjSub . unroll
 
 -- Injection/Projection {{{
 
+data Subset :: [k] -> [k] -> * where
+  ØS   :: Subset Ø bs
+  (:+) :: !(Index gs f)
+       -> !(Subset fs gs)
+       -> Subset (f :< fs) gs
+infixr 5 :+
+
+subNil :: Subset fs Ø -> fs :~: Ø
+subNil = \case
+  ØS     -> Refl
+  x :+ _ -> absurd $ ixNil x
+
 liftIndex :: (fs ⊆ gs) => Index fs f -> Index gs f
 liftIndex = \case
   IZ   -> elemIndex
   IS x -> liftIndex x
 
-class SubsetC fs gs => (fs :: [k]) ⊆ (gs :: [k]) where
-  type SubsetC fs gs :: Constraint
-  lowerIndex :: MonadPlus m => Index gs f -> m (Index fs f)
-infix 4 ⊆
+lowerIndex :: (MonadPlus m, fs ⊆ gs) => Index gs f -> m (Index fs f)
+lowerIndex = lowerIndexWith subset
 
-instance Ø ⊆ gs where
-  type SubsetC Ø gs = ØC
+lowerIndexWith :: MonadPlus m => Subset fs gs -> Index gs f -> m (Index fs f)
+lowerIndexWith = \case
+  ØS      -> const mzero
+  x :+ xs -> undefined
+
+{-
   lowerIndex _ = mzero
-
-instance (f ∈ gs, fs ⊆ gs) => (f :< fs) ⊆ gs where
-  type SubsetC (f :< fs) gs = (f ∈ gs, fs ⊆ gs)
   lowerIndex = go elemIndex
     where
     go :: MonadPlus m => Index hs f -> Index hs g -> m (Index (f :< fs) g)
@@ -175,6 +194,100 @@ instance (f ∈ gs, fs ⊆ gs) => (f :< fs) ⊆ gs where
       (IZ  ,IS _) -> mzero
       (IS _,IZ  ) -> mzero
       (IS x,IS y) -> go x y
+-}
+
+class SubsetC fs gs => (fs :: [k]) ⊆ (gs :: [k]) where
+  type SubsetC fs gs :: Constraint
+  subset :: Subset fs gs
+infix 4 ⊆
+
+instance Ø ⊆ gs where
+  type SubsetC Ø gs = ØC
+  subset = ØS
+
+instance (f ∈ gs, fs ⊆ gs) => (f :< fs) ⊆ gs where
+  type SubsetC (f :< fs) gs = (f ∈ gs, fs ⊆ gs)
+  subset = elemIndex :+ subset
+
+data SubsetReason
+  = NilSub
+  | ElemOrWeakSub (Maybe ElemReason,Maybe SubsetReason) (Maybe SubsetReason)
+
+type family IsSubsetBy (fs :: [k]) (gs :: [k]) :: Maybe SubsetReason where
+  IsSubsetBy Ø gs                = Just NilSub
+  IsSubsetBy (f :< fs) (g :< gs) = Just (ElemOrWeakSub '(IsElemBy f (g :< gs),IsSubsetBy fs (g :< gs)) (IsSubsetBy (f :< fs) gs))
+  IsSubsetBy (f :< fs) Ø         = Nothing
+
+data ElemReason
+  = HereElem
+  | ThereElem ElemReason
+
+type family IsElemBy (f :: k) (fs :: [k]) :: Maybe ElemReason where
+  IsElemBy f Ø = Nothing
+  IsElemBy f (f :< fs) = Just HereElem
+  IsElemBy f (g :< fs) = ThereElemBy (IsElemBy f fs)
+
+type family ThereElemBy (r :: Maybe ElemReason) :: Maybe ElemReason where
+  ThereElemBy Nothing = Nothing
+  ThereElemBy (Just r) = Just (ThereElem r)
+
+class SubsetBy (fs :: [k]) (gs :: [k]) (r :: Maybe SubsetReason)
+
+{-
+instance (r ~ Just NilSub) => SubsetBy Ø gs r
+instance (f ∈ gs, SubsetBy fs gs (Just r)) => SubsetBy (f :< fs) gs (Just (ElemOrWeakSub rs r2))
+-}
+
+-- }}}
+
+-- Without {{{
+
+{-
+cases :: forall fs r a. (forall x. (forall y. Rec fs y -> r y) -> Variants fs (Rec fs) x -> r x)
+      -> Rec fs a -> r a
+cases f = go
+  where
+  go :: Rec fs b -> r b
+  go (Roll v) = f go v
+-}
+
+(?) :: (f ∈ fs, Remove f fs gs)
+  => (f r a -> b)
+  -> (Variants gs r a -> b)
+  -> Variants fs r a -> b
+(f ? g) v = case decompVariants v of
+  Left  a -> f a
+  Right b -> g b
+infixr 0 ?
+
+type family Without (a :: k) (as :: [k]) :: [k] where
+  Without a  Ø        = Ø
+  Without a (a :< as) = Without a as
+  Without a (b :< as) = b :< Without a as
+
+class (gs ~ Without f fs) => Remove (f :: (k -> *) -> k -> *) (fs :: [(k -> *) -> k -> *]) (gs :: [(k -> *) -> k -> *]) | f fs -> gs where
+  decompIndex :: Index fs g -> Either (f :~: g) (Index gs g)
+  decompVariants :: Variants fs r a -> Either (f r a) (Variants gs r a)
+
+instance Remove f Ø Ø where
+  decompIndex = absurd . ixNil
+  decompVariants = noVariants
+
+instance {-# OVERLAPPING #-} Remove f fs gs => Remove f (f :< fs) gs where
+  decompIndex = \case
+    IZ   -> Left Refl
+    IS x -> decompIndex x
+  decompVariants = \case
+    L a -> Left a
+    R b -> decompVariants b
+
+instance {-# OVERLAPPABLE #-} (Without f (g :< fs) ~ (g :< Without f fs), Remove f fs gs) => Remove f (g :< fs) (g :< gs) where
+  decompIndex = \case
+    IZ   -> Right IZ
+    IS x -> id +++ IS $ decompIndex x
+  decompVariants = \case
+    L a -> Right $ L a
+    R b -> id +++ R $ decompVariants b
 
 -- }}}
 
