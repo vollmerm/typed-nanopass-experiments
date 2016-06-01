@@ -1,8 +1,5 @@
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE PatternSynonyms #-}
-{-# LANGUAGE DeriveFunctor #-}
-{-# LANGUAGE DeriveFoldable #-}
-{-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE KindSignatures #-}
@@ -10,7 +7,6 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE FlexibleInstances #-}
@@ -21,18 +17,42 @@
 module Exp where
 
 import Variants
-import Variants.Case
 
-import Control.Arrow
-import Control.Monad
-import Type.Class.Higher
-import Type.Family.Constraint
-import Type.Family.List
-import Data.Type.Index
-import Data.Type.Product
-import Data.Function (fix)
-import Data.Map (Map)
-import qualified Data.Map as Map
+import Type.Class.Higher (Functor1(..))
+import Data.Type.Index (type (∈))
+
+desugarDub ::
+  ( Functors1 l_1
+  , Remove DubF l_1 l_2
+  , NumF ∈ l_2
+  ) => Rec l_1 a -> Rec l_2 a
+desugarDub = everywhere
+  $ Match ( \(DUB x) -> Add x x )
+  $ Pass
+
+desugarLet ::
+  ( Functors1 l_1
+  , Remove LetF l_1 l_2
+  , LamF ∈ l_2
+  ) => Rec l_1 a -> Rec l_2 a
+desugarLet = everywhere
+  $ Match ( \(LET x a b) -> App (Lam x b) a )
+  $ Pass
+
+desugarDubLet ::
+  ( Functors1 l_1
+  , Remove DubF l_1 l_2
+  , Remove LetF l_2 l_3
+  , LamF ∈ l_3
+  , NumF ∈ l_3
+  ) => Rec l_1 a -> Rec l_3 a
+-- desugarDubLet :: Exp1 a -> Exp3 a
+desugarDubLet = everywhere
+  $ Match ( \(DUB x) -> Add x x )
+  $ Match ( \(LET x a b) -> App (Lam x b) a )
+  $ Pass
+
+
 
 data LamF r a where
   VAR :: String -> LamF r a
@@ -82,146 +102,44 @@ type Exp1 = Rec L1
 type Exp2 = Rec L2
 type Exp3 = Rec L3
 
-{-
-pattern Dub' :: (a ~ Int) => (DubF ∈ fs) => Rec fs Int -> Rec fs a
-pattern Dub' a <- (prjRec -> Just (DUB a))
+-- pattern Dub :: (a ~ Int) => (DubF ∈ fs) => Rec fs Int -> Rec fs a
+pattern Dub a <- (prjRec -> Just (DUB a))
   where
-  Dub' a = injRec $ DUB a
+  Dub a = injRec $ DUB a
 
-pattern Add' :: (a ~ Int) => (NumF ∈ fs) => Rec fs Int -> Rec fs Int -> Rec fs a
-pattern Add' x y <- (prjRec -> Just (ADD x y))
+-- pattern Add :: (a ~ Int) => (NumF ∈ fs) => Rec fs Int -> Rec fs Int -> Rec fs a
+pattern Add x y <- (prjRec -> Just (ADD x y))
   where
-  Add' x y = injRec $ ADD x y
+  Add x y = injRec $ ADD x y
 
-pattern Int' :: (a ~ Int) => (NumF ∈ fs) => Int -> Rec fs a
-pattern Int' i <- (prjRec -> Just (INT i))
+-- pattern Int :: (a ~ Int) => (NumF ∈ fs) => Int -> Rec fs a
+pattern Int i <- (prjRec -> Just (INT i))
   where
-  Int' i = injRec $ INT i
+  Int i = injRec $ INT i
 
-pattern IsZero' :: (a ~ Bool) => (NumF ∈ fs) => Rec fs Int -> Rec fs a
-pattern IsZero' x <- (prjRec -> Just (ISZERO x))
+-- pattern IsZero :: (a ~ Bool) => (NumF ∈ fs) => Rec fs Int -> Rec fs a
+pattern IsZero x <- (prjRec -> Just (ISZERO x))
   where
-  IsZero' x = injRec $ ISZERO x
+  IsZero x = injRec $ ISZERO x
 
-pattern If' :: () => (IfF ∈ fs) => Rec fs Bool -> Rec fs a -> Rec fs a -> Rec fs a
-pattern If' t c a <- (prjRec -> Just (IF t c a))
+-- pattern If :: () => (IfF ∈ fs) => Rec fs Bool -> Rec fs a -> Rec fs a -> Rec fs a
+pattern If t c a <- (prjRec -> Just (IF t c a))
   where
-  If' t c a = injRec $ IF t c a
+  If t c a = injRec $ IF t c a
 
-pattern Lam' :: (a ~ (b -> c)) => (LamF ∈ fs) => (Rec fs b -> Rec fs c) -> Rec fs a
-pattern Lam' f <- (prjRec -> Just (LAM f))
+pattern Lam x b <- (prjRec -> Just (LAM x b))
   where
-  Lam' f = injRec $ LAM f
+  Lam x b = injRec $ LAM x b
 
-pattern App' :: () => (LamF ∈ fs) => Rec fs (a -> b) -> Rec fs a -> Rec fs b
-pattern App' x y <- (prjRec -> Just (APP x y))
+pattern App a b <- (prjRec -> Just (APP a b))
   where
-  App' x y = injRec $ APP x y
+  App a b = injRec $ APP a b
 
-pattern Let' :: () => (LetF ∈ fs) => Rec fs a -> (Rec fs a -> Rec fs b) -> Rec fs b
-pattern Let' a f <- (prjRec -> Just (LET a f))
+pattern Var x <- (prjRec -> Just (VAR x))
   where
-  Let' a f = injRec $ LET a f
--}
+  Var x = injRec $ VAR x
 
-pattern Dub :: (a ~ Int) => (DubF ∈ fs) => r Int -> Variants fs r a
-pattern Dub a <- (prj -> Just (DUB a))
+pattern Let x a b <- (prjRec -> Just (LET x a b))
   where
-  Dub a = inj $ DUB a
-
-pattern Add :: (a ~ Int) => (NumF ∈ fs) => r Int -> r Int -> Variants fs r a
-pattern Add x y <- (prj -> Just (ADD x y))
-  where
-  Add x y = inj $ ADD x y
-
-pattern Int :: (a ~ Int) => (NumF ∈ fs) => Int -> Variants fs r a
-pattern Int i <- (prj -> Just (INT i))
-  where
-  Int i = inj $ INT i
-
-pattern IsZero :: (a ~ Bool) => (NumF ∈ fs) => r Int -> Variants fs r a
-pattern IsZero x <- (prj -> Just (ISZERO x))
-  where
-  IsZero x = inj $ ISZERO x
-
-pattern If :: () => (IfF ∈ fs) => r Bool -> r a -> r a -> Variants fs r a
-pattern If t c a <- (prj -> Just (IF t c a))
-  where
-  If t c a = inj $ IF t c a
-
-{-
-pattern Lam :: (a ~ (b -> c)) => (LamF ∈ fs) => (r b -> r c) -> Variants fs r a
-pattern Lam f <- (prj -> Just (LAM f))
-  where
-  Lam f = inj $ LAM f
-
-pattern App :: () => (LamF ∈ fs) => r (a -> b) -> r a -> Variants fs r b
-pattern App x y <- (prj -> Just (APP x y))
-  where
-  App x y = inj $ APP x y
-
-pattern Let :: () => (LetF ∈ fs) => r a -> (r a -> r b) -> Variants fs r b
-pattern Let a f <- (prj -> Just (LET a f))
-  where
-  Let a f = inj $ LET a f
--}
-
--- desugarDub :: Exp1 a -> Exp2 a
-desugarDub :: forall (fs :: [(* -> *) -> * -> *]) gs a.
-  ( Handle DubF fs gs
-  , NumF ∈ gs
-  ) => Rec fs a -> Rec gs a
-desugarDub = fix1 $ \rec ->
-  cases
-      $ ( \(DUB x) -> injRec $ ADD (rec x) (rec x)
-        )
-    -:: recursively rec
-
-  -- cases
-  --   $ ( \(DUB x) -> injRec $ ADD (desugarDub x) (desugarDub x)
-  --     )
-  -- -:: recursively desugarDub
-
-{-
-e1 :: (LamF ∈ fs) => Rec fs (a -> a)
-e1 = Lam' $ \x -> x
-
-e2 :: (LamF ∈ fs) => Rec fs ((a -> b) -> a -> b)
-e2 = Lam' $ \f -> Lam' $ \x -> App' f x
-
-e3 :: ('[IfF,NumF] ⊆ fs) => Rec fs Int
-e3 = If' (IsZero' (Int' 3))
-  (Add' (Int' 2) (Add' (Int' 1) (Int' 5)))
-  (Add' (Int' 4) (Int' 1))
--}
-
-{-
-cases :: ((Rec fs a -> b) -> Variants fs (Rec fs) a -> b) -> Rec fs a -> b
-cases f = fix $ \rec (Roll t) -> f rec t
-
-everywhere :: HFunctors fs => Variants fs r a -> (r a -> Rec fs b) -> Rec fs b
-everywhere e f = Roll $ hmap f e
-
-recursive :: (HFoldables fs, f ∈ fs) => (f (Rec fs) a -> b) -> Rec fs a -> b
-recursive f t = case prjRec t of
-  Just u -> f u
-  _      -> hfoldMap (recursive f) $ unroll t
--}
-
-{-
-desugarDub :: Exp1 a -> Exp2 a
-desugarDub = \case
-  Dub' x   -> Add' (desugarDub x) (desugarDub x)
-  Add' x y -> Add' (desugarDub x) (desugarDub x)
-  If' t c a -> If' (desugarDub t) (desugarDub c) (desugarDub a)
--}
-
-{-
-desugarDub :: Exp1 a -> Exp2 a
-desugarDub = \case
-  DUB x -> desugarDub x :+: desugarDub x
-  -- fails to check, like it should.
-  -- DUB (ISZERO x) -> desugarDub x :+: desugarDub x
-  e     -> undefined
--}
+  Let x a b = injRec $ LET x a b
 
