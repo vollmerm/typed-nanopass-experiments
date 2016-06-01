@@ -23,10 +23,15 @@ import Type.Class.Higher
 import Type.Family.List (type ListC , type Ø , type (:<) , type (<$>) , type (<&>))
 import Data.Type.Index (Index(..), type (∈), Elem(..))
 
-type Functors1 fs = ListC (Functor1 <$> fs)
+type All    c as     = ListC (c <$> as)
+type AllOp  c as x   = ListC (c <$> as <&> x)
+type AllOp2 c as x y = ListC (c <$> as <&> x <&> y)
+
+type Functors1 fs = All Functor1 fs
 
 data Cases (fs :: [(* -> *) -> * -> *]) (gs :: [(* -> *) -> * -> *]) :: * where
   Pass  :: Cases fs fs
+  Total :: Cases Ø gs
   Match :: Remove f fs gs
         => (forall x. f (Rec hs) x -> Rec hs x)
         -> Cases gs hs
@@ -56,32 +61,31 @@ instance {-# OVERLAPPABLE #-} (hs ~ (g :< gs), Remove f fs gs) => Remove f (g :<
     L a -> g $ L a
     R b -> without f (g . R) b
 
-everywhere :: ListC (Functor1 <$> fs) => Cases fs gs -> Rec fs a -> Rec gs a
+everywhere :: All Functor1 fs => Cases fs gs -> Rec fs a -> Rec gs a
 everywhere c = unroll >>> map1 (everywhere c) >>> everywhere' c
 
 everywhere' :: Cases fs gs -> Variants fs (Rec gs) a -> Rec gs a
 everywhere' = \case
   Pass       -> Roll
+  Total      -> emptyVariants
   Match f fs -> without f $ everywhere' fs
 
 
-type as ⊆ bs = ListC (Elem bs <$> as)
+type as ⊆ bs = All (Elem bs) as
 infix 4 ⊆
 
 variant :: (Functor1 f, f ∈ fs) => (forall x. r x -> s x) -> f r a -> Variants fs s a
 variant f = inj . map1 f
 
-variants :: (ListC (Functor1 <$> fs), fs ⊆ gs) => (forall x. r x -> s x) -> Variants fs r a -> Variants gs s a
+variants :: (All Functor1 fs, fs ⊆ gs) => (forall x. r x -> s x) -> Variants fs r a -> Variants gs s a
 variants f = \case
   L a -> variant  f a
   R b -> variants f b
 
-boilerplate :: (ListC (Functor1 <$> fs), fs ⊆ gs) => (forall x. Rec fs x -> Rec gs x) -> Rec fs a -> Rec gs a
+boilerplate :: (All Functor1 fs, fs ⊆ gs) => (forall x. Rec fs x -> Rec gs x) -> Rec fs a -> Rec gs a
 boilerplate f = Roll . variants f . unroll
 
 -- Variants {{{
-
-type FunctorsOn r fs = ListC (Functor <$> fs <&> r)
 
 data Variants :: [(* -> *) -> * -> *] -> (* -> *) -> * -> * where
   L :: !(f r a)
@@ -89,7 +93,7 @@ data Variants :: [(* -> *) -> * -> *] -> (* -> *) -> * -> * where
   R :: !(Variants fs r a)
     -> Variants (f :< fs) r a
 
-deriving instance ListC (Eq <$> fs <&> r <&> a)
+deriving instance AllOp2 Eq fs r a -- ListC (Eq <$> fs <&> r <&> a)
   => Eq (Variants fs r a)
 deriving instance
   ( ListC (Eq  <$> fs <&> r <&> a)
@@ -97,11 +101,6 @@ deriving instance
   ) => Ord (Variants fs r a)
 deriving instance ListC (Show <$> fs <&> r <&> a)
   => Show (Variants fs r a)
-
-instance FunctorsOn r fs => Functor (Variants fs r) where
-  fmap f = \case
-    L a -> L $ f <$> a
-    R b -> R $ f <$> b
 
 instance ListC (Functor1 <$> fs) => Functor1 (Variants fs) where
   map1 f = \case

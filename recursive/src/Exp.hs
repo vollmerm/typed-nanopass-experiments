@@ -1,3 +1,4 @@
+-- {-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE DataKinds #-}
@@ -52,7 +53,40 @@ desugarDubLet = everywhere
   $ Match ( \(LET x a b) -> App (Lam x b) a )
   $ Pass
 
+-- Could be generalized with a Render class
+renderExp1 :: Exp1 a -> String
+renderExp1 = (getShow .) $ everywhere
+  $ Match ? \case
+    DUB (Sh a)              -> Sh $ "(dub " ++ a ++ ")"
+  $ Match ? \case
+    LET x (Sh a) (Sh b)     -> Sh $ "(let " ++ x ++ " = " ++ a ++ " in " ++ b ++ ")"
+  $ Match ? \case
+    IF (Sh t) (Sh c) (Sh a) -> Sh $ "(if " ++ t ++ " then " ++ c ++ " else " ++ a ++ ")"
+  $ Match ? \case
+    VAR x                   -> Sh x
+    LAM x (Sh a)            -> Sh $ "(\\" ++ x ++ " -> " ++ a ++ ")"
+    APP (Sh a) (Sh b)       -> Sh $ "(" ++ a ++ " " ++ b ++ ")"
+  $ Match ? \case
+    INT i                   -> Sh $ show i
+    ADD (Sh a) (Sh b)       -> Sh $ "(" ++ a ++ " + " ++ b ++ ")"
+    ISZERO (Sh a)           -> Sh $ "(isZero " ++ a ++ ")"
+  $ Total
 
+-- type is inferred with NoMonomorphismRestriction
+-- e1 :: ('[LamF,DubF] ⊆ l_1) => Rec l_1 (a -> Int)
+e1 :: Exp1 (Int -> Int)
+e1 = Lam "x" (Dub (Var "x"))
+
+
+data ShowF :: (* -> *) -> * -> * where
+  SHOW :: String -> ShowF r a
+
+pattern Sh x <- (prjRec -> Just (SHOW x))
+  where
+  Sh x = injRec $ SHOW x
+
+getShow :: Rec '[ShowF] a -> String
+getShow (Sh s) = s
 
 data LamF r a where
   VAR :: String -> LamF r a
@@ -142,4 +176,8 @@ pattern Var x <- (prjRec -> Just (VAR x))
 pattern Let x a b <- (prjRec -> Just (LET x a b))
   where
   Let x a b = injRec $ LET x a b
+
+(?) :: ((forall x. f x -> g x) -> b) -> (forall x. f x -> g x) -> b
+f ? g = f g
+infixr 1 ?
 
