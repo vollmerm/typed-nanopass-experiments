@@ -20,6 +20,7 @@ module Variants where
 import Control.Arrow ((>>>))
 import Control.Monad (MonadPlus(..))
 import Type.Class.Higher
+import Type.Family.Constraint (type Constraint, ØC)
 import Type.Family.List (type ListC , type Ø , type (:<) , type (<$>) , type (<&>))
 import Data.Type.Index (Index(..), type (∈), Elem(..))
 
@@ -29,18 +30,30 @@ type AllOp2 c as x y = ListC (c <$> as <&> x <&> y)
 
 type Functors1 fs = All Functor1 fs
 
-data Cases (fs :: [(* -> *) -> * -> *]) (gs :: [(* -> *) -> * -> *]) :: * where
-  Pass  :: Cases fs fs
-  Total :: Cases Ø gs
-  Match :: Remove f fs gs
+data Plain (fs :: [(* -> *) -> * -> *]) (r :: * -> *) :: * -> * -> * where
+  Void  :: Plain Ø r a b
+  Case  :: Remove f fs gs
+        => (f r a -> b)
+        -> Plain gs r a b
+        -> Plain fs r a b
+  Pass' :: Plain fs (Rec fs) a (Rec fs a)
+
+data Recursive (fs :: [(* -> *) -> * -> *]) (gs :: [(* -> *) -> * -> *]) :: * where
+  Pass  :: Recursive fs fs
+  Total :: Recursive Ø gs
+  Elim  :: Remove f fs gs
         => (forall x. f (Rec hs) x -> Rec hs x)
-        -> Cases gs hs
-        -> Cases fs hs
+        -> Recursive gs hs
+        -> Recursive fs hs
+  Match :: (f ∈ fs)
+        => (forall x. f (Rec gs) x -> Rec gs x)
+        -> Recursive fs gs
+        -> Recursive fs gs
 
 class (f ∈ fs) => Remove (f :: (* -> *) -> * -> *) (fs :: [(* -> *) -> * -> *]) (gs :: [(* -> *) -> * -> *]) | fs f -> gs where
-  without :: (f r a -> r b)
-          -> (Variants gs r a -> r b)
-          -> Variants fs r a -> r b
+  without :: (f r a -> b)
+          -> (Variants gs r a -> b)
+          -> Variants fs r a -> b
   without1 :: (forall x. f r x -> r x)
            -> (forall x. Variants gs r x -> r x)
            -> Variants fs r a -> r a
@@ -61,15 +74,41 @@ instance {-# OVERLAPPABLE #-} (hs ~ (g :< gs), Remove f fs gs) => Remove f (g :<
     L a -> g $ L a
     R b -> without f (g . R) b
 
-everywhere :: All Functor1 fs => Cases fs gs -> Rec fs a -> Rec gs a
+match :: Plain fs (Rec fs) a b -> Rec fs a -> b
+match c = match' c . unroll
+
+match' :: Plain fs r a b -> Variants fs r a -> b
+match' = \case
+  Void      -> emptyVariants
+  Case f fs -> without f $ match' fs
+  Pass'     -> Roll
+
+everywhere :: All Functor1 fs => Recursive fs gs -> Rec fs a -> Rec gs a
 everywhere c = unroll >>> map1 (everywhere c) >>> everywhere' c
 
-everywhere' :: Cases fs gs -> Variants fs (Rec gs) a -> Rec gs a
+everywhere' :: Recursive fs gs -> Variants fs (Rec gs) a -> Rec gs a
 everywhere' = \case
   Pass       -> Roll
   Total      -> emptyVariants
-  Match f fs -> without f $ everywhere' fs
+  Elim  f fs -> without f $ everywhere' fs
+  Match f fs -> replaceAt f (everywhere' fs) elemIndex
 
+foldRec :: All Functor1 fs => (forall f x. Index fs f -> f r x -> r x) -> Rec fs a -> r a
+foldRec f = foldVariants f . map1 (foldRec f) . unroll
+
+foldVariants :: (forall f x. Index fs f -> f r x -> s x) -> Variants fs r a -> s a
+foldVariants f = \case
+  L a -> f IZ a
+  R b -> foldVariants (f . IS) b
+
+replaceAt :: (forall x. f r x -> s x) -> (forall x. Variants fs r x -> s x) -> Index fs f -> Variants fs r a -> s a
+replaceAt f k = \case
+  IZ   -> \case
+    L a -> f a
+    R b -> k $ R b
+  IS x -> \case
+    L a -> k $ L a
+    R b -> replaceAt f (k . R) x b
 
 type as ⊆ bs = All (Elem bs) as
 infix 4 ⊆
@@ -205,4 +244,12 @@ fix1 k = f
   where
   f :: forall x. f x -> g x
   f = k f
+
+class HFunctor (f :: (k -> *) -> k -> *) where
+  hmap :: (r a -> s b) -> f r a -> f s b
+
+instance All HFunctor fs => HFunctor (Variants fs) where
+  hmap f = \case
+    L a -> L $ hmap f a
+    R b -> R $ hmap f b
 

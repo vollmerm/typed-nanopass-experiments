@@ -1,3 +1,4 @@
+{-# LANGUAGE ConstraintKinds #-}
 -- {-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE PatternSynonyms #-}
@@ -19,8 +20,13 @@ module Exp where
 
 import Variants
 
+import Control.Monad.Fix
 import Type.Class.Higher (Functor1(..))
-import Data.Type.Index (type (∈))
+import Data.Type.Index (type (∈),Index(..))
+import Data.Functor.Constant
+import Data.Function (fix)
+import Data.Typeable
+import Data.Maybe (fromJust)
 
 desugarDub ::
   ( Functors1 l_1
@@ -28,7 +34,8 @@ desugarDub ::
   , NumF ∈ l_2
   ) => Rec l_1 a -> Rec l_2 a
 desugarDub = everywhere
-  $ Match ( \(DUB x) -> Add x x )
+  $ Elim ? \case
+    DUB x -> Add x x
   $ Pass
 
 desugarLet ::
@@ -37,7 +44,8 @@ desugarLet ::
   , LamF ∈ l_2
   ) => Rec l_1 a -> Rec l_2 a
 desugarLet = everywhere
-  $ Match ( \(LET x a b) -> App (Lam x b) a )
+  $ Elim ? \case
+    LET x a b -> App (Lam x b) a
   $ Pass
 
 desugarDubLet ::
@@ -49,27 +57,67 @@ desugarDubLet ::
   ) => Rec l_1 a -> Rec l_3 a
 -- desugarDubLet :: Exp1 a -> Exp3 a
 desugarDubLet = everywhere
-  $ Match ( \(DUB x) -> Add x x )
-  $ Match ( \(LET x a b) -> App (Lam x b) a )
+  $ Elim ? \case
+    DUB x -> Add x x
+  $ Elim ? \case
+    LET x a b -> App (Lam x b) a
   $ Pass
 
--- Could be generalized with a Render class
-renderExp1 :: Exp1 a -> String
-renderExp1 = (getShow .) $ everywhere
+swapAdd ::
+  ( All Functor1 l
+  , NumF ∈ l
+  ) => Rec l a -> Rec l a
+swapAdd = everywhere
   $ Match ? \case
-    DUB (Sh a)              -> Sh $ "(dub " ++ a ++ ")"
-  $ Match ? \case
-    LET x (Sh a) (Sh b)     -> Sh $ "(let " ++ x ++ " = " ++ a ++ " in " ++ b ++ ")"
-  $ Match ? \case
-    IF (Sh t) (Sh c) (Sh a) -> Sh $ "(if " ++ t ++ " then " ++ c ++ " else " ++ a ++ ")"
-  $ Match ? \case
-    VAR x                   -> Sh x
-    LAM x (Sh a)            -> Sh $ "(\\" ++ x ++ " -> " ++ a ++ ")"
-    APP (Sh a) (Sh b)       -> Sh $ "(" ++ a ++ " " ++ b ++ ")"
-  $ Match ? \case
-    INT i                   -> Sh $ show i
-    ADD (Sh a) (Sh b)       -> Sh $ "(" ++ a ++ " + " ++ b ++ ")"
-    ISZERO (Sh a)           -> Sh $ "(isZero " ++ a ++ ")"
+    ADD x y -> Add y x
+  $ Pass
+
+class Render (f :: (* -> *) -> * -> *) where
+  render :: f (Constant ShowS) a -> Constant ShowS a
+
+renderAll :: (All Render fs, All Functor1 fs) => Rec fs a -> String
+renderAll = ($ "") . getConstant . byClass (undefined :: prx Render) render
+
+byClass :: forall prx c fs r a. (All c fs, All Functor1 fs) => prx c -> (forall f x. c f => f r x -> r x) -> Rec fs a -> r a
+byClass p f = go . map1 (byClass p f) . unroll
+  where
+  go :: forall gs x. All c gs => Variants gs r x -> r x
+  go = \case
+    L a -> f a
+    R b -> go b
+
+data Val :: * where
+  Val :: Typeable a => a -> Val
+
+data Eval :: (* -> *) -> * -> * where
+  EV :: ((forall x. Typeable x => String -> Maybe x) -> a) -> Eval r a
+
+pattern Ev f <- (prjRec -> Just (EV f))
+  where
+  Ev f = injRec $ EV f
+
+eval :: Exp1 a -> a
+eval e = case eval' e of
+  Ev a -> a $ const Nothing
+
+eval' :: Exp1 a -> Rec '[Eval] a
+eval' = everywhere
+  $ Elim ? \case
+    LAM x (Ev b)      -> Ev $ \k a -> b $ \y -> if x == y then cast a else k y
+    APP (Ev a) (Ev b) -> Ev $ \k -> a k (b k)
+    VAR x             -> Ev $ \k -> case k x of
+      Just v -> v
+      _      -> error $ "unbound variable: " ++ x
+  $ Elim ? \case
+    DUB (Ev x)        -> Ev $ \k -> x k + x k
+  $ Elim ? \case
+    IF (Ev t) (Ev c) (Ev a) -> Ev $ \k -> if t k then c k else a k
+  $ Elim ? \case
+    LET x (Ev a) (Ev b) -> Ev $ \k -> b $ \y -> if x == y then cast (a k) else k y
+  $ Elim ? \case
+    INT i             -> Ev $ \_ -> i
+    ADD (Ev x) (Ev y) -> Ev $ \k -> x k + y k
+    ISZERO (Ev x)     -> Ev $ \k -> x k == 0
   $ Total
 
 -- type is inferred with NoMonomorphismRestriction
@@ -77,6 +125,11 @@ renderExp1 = (getShow .) $ everywhere
 e1 :: Exp1 (Int -> Int)
 e1 = Lam "x" (Dub (Var "x"))
 
+e1' :: Exp2 (Int -> Int)
+e1' = desugarDub e1
+
+e2 :: Exp1 Int
+e2 = Let "x" (Int 3) (Dub (Var "x"))
 
 data ShowF :: (* -> *) -> * -> * where
   SHOW :: String -> ShowF r a
@@ -89,9 +142,24 @@ getShow :: Rec '[ShowF] a -> String
 getShow (Sh s) = s
 
 data LamF r a where
-  VAR :: String -> LamF r a
-  LAM :: String -> r b -> LamF r (a -> b)
+  VAR :: Typeable a
+      => String -> LamF r a
+  LAM :: Typeable a
+      => String -> r b -> LamF r (a -> b)
   APP :: r (a -> b) -> r a -> LamF r b
+
+instance Render LamF where
+  render = \case
+    VAR x    -> Constant $ showString x
+    LAM x b -> Constant $ showParen True
+      $ showChar '\\'
+      . showString x
+      . showString " -> "
+      . getConstant b
+    APP a b -> Constant $ showParen True
+      $ getConstant a
+      . showChar ' '
+      . getConstant b
 
 instance Functor1 LamF where
   map1 f = \case
@@ -100,13 +168,31 @@ instance Functor1 LamF where
     APP a b -> APP (f a) (f b)
 
 data LetF r a where
-  LET :: String -> r a -> r b -> LetF r b
+  LET :: Typeable a => String -> r a -> r b -> LetF r b
+
+instance Render LetF where
+  render (LET x a b) = Constant $ showParen True
+    $ showString "let "
+    . showString x
+    . showString " = "
+    . getConstant a
+    . showString " in "
+    . getConstant b
 
 instance Functor1 LetF where
   map1 f (LET x a b) = LET x (f a) (f b)
 
 data IfF r a where
   IF :: r Bool -> r a -> r a -> IfF r a
+
+instance Render IfF where
+  render (IF t c a) = Constant $ showParen True
+    $ showString "if "
+    . getConstant t
+    . showString " then "
+    . getConstant c
+    . showString " else "
+    . getConstant a
 
 instance Functor1 IfF where
   map1 f (IF t c a) = IF (f t) (f c) (f a)
@@ -122,11 +208,27 @@ instance Functor1 NumF where
     ADD x y  -> ADD (f x) (f y)
     ISZERO x -> ISZERO (f x)
 
+instance Render NumF where
+  render = \case
+    INT i    -> Constant $ shows i
+    ADD x y  -> Constant $ showParen True
+      $ getConstant x
+      . showString " + "
+      . getConstant y
+    ISZERO x -> Constant $ showParen True
+      $ showString "isZero "
+      . getConstant x
+
 data DubF r a where
   DUB :: r Int -> DubF r Int
 
 instance Functor1 DubF where
   map1 f (DUB x) = DUB (f x)
+
+instance Render DubF where
+  render (DUB x) = Constant $ showParen True
+    $ showString "dub "
+    . getConstant x
 
 type L1 = '[DubF,LamF,LetF,IfF,NumF]
 type L2 = '[LamF,LetF,IfF,NumF]
@@ -180,4 +282,8 @@ pattern Let x a b <- (prjRec -> Just (LET x a b))
 (?) :: ((forall x. f x -> g x) -> b) -> (forall x. f x -> g x) -> b
 f ? g = f g
 infixr 1 ?
+
+(??) :: (a -> b) -> a -> b
+(??) = ($)
+infixr 1 ??
 
