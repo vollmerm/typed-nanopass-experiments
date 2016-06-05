@@ -30,25 +30,33 @@ type AllOp2 c as x y = ListC (c <$> as <&> x <&> y)
 
 type Functors1 fs = All Functor1 fs
 
-data Plain (fs :: [(* -> *) -> * -> *]) (r :: * -> *) :: * -> * -> * where
-  Void  :: Plain Ø r a b
-  Case  :: Remove f fs gs
+data Match (fs :: [(* -> *) -> * -> *]) (r :: * -> *) :: * -> * -> * where
+  Total :: Match Ø r a b
+  Elim  :: Remove f fs gs
         => (f r a -> b)
-        -> Plain gs r a b
-        -> Plain fs r a b
-  Pass' :: Plain fs (Rec fs) a (Rec fs a)
+        -> Match gs r a b
+        -> Match fs r a b
+  Match :: (f ∈ fs)
+        => (f r a -> b)
+        -> Match fs r a b
+        -> Match fs r a b
+  Pass :: Match fs (Rec fs) a (Rec fs a)
+  Else :: (Variants fs r a -> b)
+       -> Match fs r a b
 
 data Recursive (fs :: [(* -> *) -> * -> *]) (gs :: [(* -> *) -> * -> *]) :: * where
-  Pass  :: Recursive fs fs
-  Total :: Recursive Ø gs
-  Elim  :: Remove f fs gs
-        => (forall x. f (Rec hs) x -> Rec hs x)
-        -> Recursive gs hs
-        -> Recursive fs hs
-  Match :: (f ∈ fs)
-        => (forall x. f (Rec gs) x -> Rec gs x)
-        -> Recursive fs gs
-        -> Recursive fs gs
+  PassRec  :: Recursive fs fs
+  TotalRec :: Recursive Ø gs
+  ElimRec  :: Remove f fs gs
+           => (forall x. f (Rec hs) x -> Rec hs x)
+           -> Recursive gs hs
+           -> Recursive fs hs
+  MatchRec :: (f ∈ fs)
+           => (forall x. f (Rec gs) x -> Rec gs x)
+           -> Recursive fs gs
+           -> Recursive fs gs
+  ElseRec  :: (forall x. Variants fs (Rec gs) x -> Rec gs x)
+           -> Recursive fs gs
 
 class (f ∈ fs) => Remove (f :: (* -> *) -> * -> *) (fs :: [(* -> *) -> * -> *]) (gs :: [(* -> *) -> * -> *]) | fs f -> gs where
   without :: (f r a -> b)
@@ -74,34 +82,37 @@ instance {-# OVERLAPPABLE #-} (hs ~ (g :< gs), Remove f fs gs) => Remove f (g :<
     L a -> g $ L a
     R b -> without f (g . R) b
 
-match :: Plain fs (Rec fs) a b -> Rec fs a -> b
+match :: Match fs (Rec fs) a b -> Rec fs a -> b
 match c = match' c . unroll
 
-match' :: Plain fs r a b -> Variants fs r a -> b
+match' :: Match fs r a b -> Variants fs r a -> b
 match' = \case
-  Void      -> emptyVariants
-  Case f fs -> without f $ match' fs
-  Pass'     -> Roll
+  Total      -> emptyVariants
+  Elim  f fs -> without f $ match' fs
+  Match f fs -> replaceAt f (match' fs) elemIndex
+  Pass       -> Roll
+  Else f     -> f
 
 everywhere :: All Functor1 fs => Recursive fs gs -> Rec fs a -> Rec gs a
 everywhere c = unroll >>> map1 (everywhere c) >>> everywhere' c
 
 everywhere' :: Recursive fs gs -> Variants fs (Rec gs) a -> Rec gs a
 everywhere' = \case
-  Pass       -> Roll
-  Total      -> emptyVariants
-  Elim  f fs -> without f $ everywhere' fs
-  Match f fs -> replaceAt f (everywhere' fs) elemIndex
+  PassRec       -> Roll
+  TotalRec      -> emptyVariants
+  ElimRec  f fs -> without f $ everywhere' fs
+  MatchRec f fs -> replaceAt1 f (everywhere' fs) elemIndex
+  ElseRec  f    -> f
 
-foldRec :: All Functor1 fs => (forall f x. Index fs f -> f r x -> r x) -> Rec fs a -> r a
-foldRec f = foldVariants f . map1 (foldRec f) . unroll
+foldRec1 :: All Functor1 fs => (forall f x. Index fs f -> f r x -> r x) -> Rec fs a -> r a
+foldRec1 f = foldVariants1 f . map1 (foldRec1 f) . unroll
 
-foldVariants :: (forall f x. Index fs f -> f r x -> s x) -> Variants fs r a -> s a
-foldVariants f = \case
+foldVariants1 :: (forall f x. Index fs f -> f r x -> s x) -> Variants fs r a -> s a
+foldVariants1 f = \case
   L a -> f IZ a
-  R b -> foldVariants (f . IS) b
+  R b -> foldVariants1 (f . IS) b
 
-replaceAt :: (forall x. f r x -> s x) -> (forall x. Variants fs r x -> s x) -> Index fs f -> Variants fs r a -> s a
+replaceAt :: (f r a -> b) -> (Variants fs r a -> b) -> Index fs f -> Variants fs r a -> b
 replaceAt f k = \case
   IZ   -> \case
     L a -> f a
@@ -109,6 +120,15 @@ replaceAt f k = \case
   IS x -> \case
     L a -> k $ L a
     R b -> replaceAt f (k . R) x b
+
+replaceAt1 :: (forall x. f r x -> s x) -> (forall x. Variants fs r x -> s x) -> Index fs f -> Variants fs r a -> s a
+replaceAt1 f k = \case
+  IZ   -> \case
+    L a -> f a
+    R b -> k $ R b
+  IS x -> \case
+    L a -> k $ L a
+    R b -> replaceAt1 f (k . R) x b
 
 type as ⊆ bs = All (Elem bs) as
 infix 4 ⊆
@@ -161,11 +181,11 @@ imapVariants f = \case
     El y b -> injWith y b
   R b -> imapVariants (f . IS) b
 
-ifoldVariants :: (forall f. Index fs f -> f r a -> m)
+foldVariants :: (forall f. Index fs f -> f r a -> m)
                  -> Variants fs r a -> m
-ifoldVariants f = \case
+foldVariants f = \case
   L a -> f IZ a
-  R b -> ifoldVariants (f . IS) b
+  R b -> foldVariants (f . IS) b
 
 itraverseVariants :: Functor g => (forall f. Index fs f -> f r a -> g (El gs s b))
                   -> Variants fs r a -> g (Variants gs s b)
@@ -223,9 +243,9 @@ imapRec :: (forall f. Index fs f -> f (Rec fs) a -> El gs (Rec gs) b)
         -> Rec fs a -> Rec gs b
 imapRec f = Roll . imapVariants f . unroll
 
-ifoldRec :: (forall f. Index fs f -> f (Rec fs) a -> m)
+foldRec :: (forall f. Index fs f -> f (Rec fs) a -> m)
          -> Rec fs a -> m
-ifoldRec f = ifoldVariants f . unroll
+foldRec f = foldVariants f . unroll
 
 itraverseRec :: Functor g => (forall f. Index fs f -> f (Rec fs) a -> g (El gs (Rec gs) b))
              -> Rec fs a -> g (Rec gs b)
@@ -252,4 +272,12 @@ instance All HFunctor fs => HFunctor (Variants fs) where
   hmap f = \case
     L a -> L $ hmap f a
     R b -> R $ hmap f b
+
+class HFoldable (f :: (k -> *) -> k -> *) where
+  hfoldMap :: Monoid m => (r a -> m) -> f r a -> m
+
+instance All HFoldable fs => HFoldable (Variants fs) where
+  hfoldMap f = \case
+    L a -> hfoldMap f a
+    R b -> hfoldMap f b
 
