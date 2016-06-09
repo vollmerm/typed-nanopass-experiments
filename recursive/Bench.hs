@@ -40,16 +40,18 @@ import Control.DeepSeq
 main :: IO ()
 main = defaultMain [
         bgroup "generic"
-        [ bench "100"  $ nf renderAll $ genericBench 100
+        [ bench "10"  $ nf renderAll $ genericBench 10
+        , bench "50"  $ nf renderAll $ genericBench 50
+        , bench "100"  $ nf renderAll $ genericBench 100
         , bench "500"  $ nf renderAll $ genericBench 500
         , bench "1000" $ nf renderAll $ genericBench 1000
-        , bench "2000" $ nf renderAll $ genericBench 2000
         ]
        , bgroup "oneADT"
-        [ bench "100"  $ nf show $ oneBench 100
-        , bench "500"  $ nf show $ oneBench 500
-        , bench "1000" $ nf show $ oneBench 1000
-        , bench "2000" $ nf show $ oneBench 2000
+        [ bench "10"  $ nf renderOne $ oneBench 10
+        , bench "50"  $ nf renderOne $ oneBench 50
+        , bench "100"  $ nf renderOne $ oneBench 100
+        , bench "500"  $ nf renderOne $ oneBench 500
+        , bench "1000" $ nf renderOne $ oneBench 1000
         ]        
        ]
 
@@ -64,6 +66,31 @@ data OneADT = OLamb String OneADT | OLet String OneADT OneADT |
               OApply OneADT OneADT | ODub OneADT | OInt Int | OVar String
               deriving Show
                        
+renderOne e = (renderOne' e) ""
+
+renderOne' :: OneADT -> ShowS
+renderOne' (OLamb v e) = showParen True
+                       $ showChar '\\'
+                       . showString v
+                       . showString " -> "
+                       . renderOne' e
+renderOne' (OLet v e1 e2) = showParen True
+                         $ showString "let "
+                         . showString v
+                         . showString " = "
+                         . renderOne' e1
+                         . showString " in "
+                         . renderOne' e2
+renderOne' (OApply e1 e2) = showParen True
+                         $ renderOne' e1
+                         . showChar ' '
+                         . renderOne' e2
+renderOne' (ODub e) = showParen True
+                   $ showString "dub "
+                   . renderOne' e
+renderOne' (OInt i) = shows i
+renderOne' (OVar v) = shows v
+
 buildOneADT :: Int -> OneADT
 buildOneADT 0 = OLet "x" (OInt 0) (OVar "x")
 buildOneADT i = OLet "z" (OInt i) (buildOneADT (i - 1))

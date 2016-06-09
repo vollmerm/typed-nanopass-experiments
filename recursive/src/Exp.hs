@@ -200,6 +200,9 @@ e1' = desugarDub e1
 e2 :: Exp1 Int
 e2 = Let "x" (Int 3) (Dub (Var "x"))
 
+e3 :: Exp2 Int
+e3 = Let "x" (Int 3) (Let "y" (Int 2) (Var "y"))
+
 data VarsF :: (* -> *) -> * -> * where
   VARS :: Set String -> VarsF r a
 
