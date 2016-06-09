@@ -35,76 +35,92 @@ import Criterion.Main
 import GHC.Generics (Generic)
 import Control.DeepSeq
 
+
 -- This generates a series of nested `let` expressions, desugars all of them,
 -- and converts the resulting expression to a string.
 main :: IO ()
 main = defaultMain [
         bgroup "generic"
-        [ bench "10"  $ nf renderAll $ genericBench 10
-        , bench "50"  $ nf renderAll $ genericBench 50
-        , bench "100"  $ nf renderAll $ genericBench 100
-        , bench "500"  $ nf renderAll $ genericBench 500
-        , bench "1000" $ nf renderAll $ genericBench 1000
+        [ bench "10"  $ nf forceAll $ genericBench 10
+        , bench "50"  $ nf forceAll $ genericBench 50
+        , bench "100"  $ nf forceAll $ genericBench 100
+        , bench "500"  $ nf forceAll $ genericBench 500
+        , bench "1000" $ nf forceAll $ genericBench 1000
         ]
        , bgroup "oneADT"
-        [ bench "10"  $ nf renderOne $ oneBench 10
-        , bench "50"  $ nf renderOne $ oneBench 50
-        , bench "100"  $ nf renderOne $ oneBench 100
-        , bench "500"  $ nf renderOne $ oneBench 500
-        , bench "1000" $ nf renderOne $ oneBench 1000
+        [ bench "10"  $ nf oneBench 10
+        , bench "50"  $ nf oneBench 50
+        , bench "100"  $ nf oneBench 100
+        , bench "500"  $ nf oneBench 500
+        , bench "1000" $ nf oneBench 1000
         ]        
        ]
+
+-- forceAll = undefined
 
 buildExpr :: Int -> Exp2 Int
 buildExpr 0 = Let "x" (Int 0) (Var "x")
 buildExpr i = Let "z" (Int i) (buildExpr (i - 1))
 
-genericBench :: Int -> Exp3 Int
-genericBench i = desugarLet $ buildExpr i
+genericBench i = genericBench' i
+
+genericBench' :: Int -> Exp3 Int
+genericBench' i = desugarLet $ buildExpr i
 
 data OneADT = OLamb String OneADT | OLet String OneADT OneADT |
-              OApply OneADT OneADT | ODub OneADT | OInt Int | OVar String
-              deriving Show
+              OApply OneADT OneADT | ODub OneADT | OAdd OneADT OneADT |
+              OInt Int | OVar String
+              deriving (Show, Generic, NFData)
                        
-renderOne e = (renderOne' e) ""
+-- renderOne e = (renderOne' e) ""
 
-renderOne' :: OneADT -> ShowS
-renderOne' (OLamb v e) = showParen True
-                       $ showChar '\\'
-                       . showString v
-                       . showString " -> "
-                       . renderOne' e
-renderOne' (OLet v e1 e2) = showParen True
-                         $ showString "let "
-                         . showString v
-                         . showString " = "
-                         . renderOne' e1
-                         . showString " in "
-                         . renderOne' e2
-renderOne' (OApply e1 e2) = showParen True
-                         $ renderOne' e1
-                         . showChar ' '
-                         . renderOne' e2
-renderOne' (ODub e) = showParen True
-                   $ showString "dub "
-                   . renderOne' e
-renderOne' (OInt i) = shows i
-renderOne' (OVar v) = shows v
+-- renderOne' :: OneADT -> ShowS
+-- renderOne' (OLamb v e) = showParen True
+--                        $ showChar '\\'
+--                        . showString v
+--                        . showString " -> "
+--                        . renderOne' e
+-- renderOne' (OLet v e1 e2) = showParen True
+--                          $ showString "let "
+--                          . showString v
+--                          . showString " = "
+--                          . renderOne' e1
+--                          . showString " in "
+--                          . renderOne' e2
+-- renderOne' (OApply e1 e2) = showParen True
+--                          $ renderOne' e1
+--                          . showChar ' '
+--                          . renderOne' e2
+-- renderOne' (ODub e) = showParen True
+--                    $ showString "dub "
+--                    . renderOne' e
+-- renderOne' (OInt i) = shows i
+-- renderOne' (OVar v) = shows v
 
 buildOneADT :: Int -> OneADT
 buildOneADT 0 = OLet "x" (OInt 0) (OVar "x")
 buildOneADT i = OLet "z" (OInt i) (buildOneADT (i - 1))
 
 oneBench :: Int -> OneADT
-oneBench i = oneDesugar $ buildOneADT i
+oneBench i = oneDesugarLet $ buildOneADT i
 
-oneDesugar :: OneADT -> OneADT
-oneDesugar (OLamb v e) = OLamb v (oneDesugar e)
-oneDesugar (OLet v e1 e2) = OApply (OLamb v (oneDesugar e2)) (oneDesugar e1)
-oneDesugar (OApply e1 e2) = OApply (oneDesugar e1) (oneDesugar e2)
-oneDesugar (ODub e) = ODub (oneDesugar e)
-oneDesugar (OInt i) = OInt i
-oneDesugar (OVar s) = OVar s
+oneDesugarDub :: OneADT -> OneADT
+oneDesugarDub (OLamb v e) = OLamb v (oneDesugarDub e)
+oneDesugarDub (OLet v e1 e2) = OLet v (oneDesugarDub e1) (oneDesugarDub e2)
+oneDesugarDub (OApply e1 e2) = OApply (oneDesugarDub e1) (oneDesugarDub e2)
+oneDesugarDub (ODub e) = let e' = (oneDesugarDub e) in OAdd e e
+oneDesugarDub (OAdd e1 e2) = OAdd (oneDesugarDub e1) (oneDesugarDub e2)
+oneDesugarDub (OInt i) = OInt i
+oneDesugarDub (OVar s) = OVar s
+
+oneDesugarLet :: OneADT -> OneADT
+oneDesugarLet (OLamb v e) = OLamb v (oneDesugarLet e)
+oneDesugarLet (OLet v e1 e2) = OApply (OLamb v (oneDesugarLet e2)) (oneDesugarLet e1)
+oneDesugarLet (OApply e1 e2) = OApply (oneDesugarLet e1) (oneDesugarLet e2)
+oneDesugarLet (ODub e) = error "Impossible"
+oneDesugarLet (OAdd e1 e2) = OAdd (oneDesugarDub e1) (oneDesugarDub e2)
+oneDesugarLet (OInt i) = OInt i
+oneDesugarLet (OVar s) = OVar s
        
 desugarDub ::
   ( Functors1 l_1
@@ -150,8 +166,19 @@ swapAdd = everywhere
     ADD x y -> Add y x
   $ PassRec
 
+-- data Unit a = Unit deriving (Show)
+
+-- instance Functor Unit where
+--     fmap _ _    = Unit
+
+class Forced (f :: (* -> *) -> * -> *) where
+  forced :: f (Constant ()) a -> Constant () a
+
 class Render (f :: (* -> *) -> * -> *) where
   render :: f (Constant ShowS) a -> Constant ShowS a
+
+forceAll :: (All Forced fs, All Functor1 fs) => Rec fs a -> ()
+forceAll = getConstant . byClass (undefined :: prx Forced) forced
 
 renderAll :: (All Render fs, All Functor1 fs) => Rec fs a -> String
 renderAll = ($ "") . getConstant . byClass (undefined :: prx Render) render
@@ -302,6 +329,12 @@ data LamF r a where
       => String -> r b -> LamF r (a -> b)
   APP :: r (a -> b) -> r a -> LamF r b
 
+instance Forced LamF where
+  forced = \case
+    VAR x -> x `seq` (Constant ())
+    LAM x b -> x `seq` (getConstant b) `seq` (Constant ())
+    APP x y -> (getConstant x) `seq` (getConstant y) `seq` (Constant())
+
 instance Render LamF where
   render = \case
     VAR x    -> Constant $ showString x
@@ -324,6 +357,9 @@ instance Functor1 LamF where
 data LetF r a where
   LET :: Typeable a => String -> r a -> r b -> LetF r b
 
+instance Forced LetF where
+  forced (LET x a b) = x `seq` (getConstant a) `seq` (getConstant b) `seq` (Constant ())
+
 instance Render LetF where
   render (LET x a b) = Constant $ showParen True
     $ showString "let "
@@ -342,6 +378,14 @@ data TruthF r a where
   NOT  :: r Bool -> TruthF r Bool
   OR   :: r Bool -> r Bool -> TruthF r Bool
   AND  :: r Bool -> r Bool -> TruthF r Bool
+
+instance Forced TruthF where
+  forced = \case
+    IF a b c -> (getConstant a) `seq` (getConstant b) `seq` (getConstant c) `seq` (Constant ())
+    BOOL b -> b `seq` (Constant ())
+    NOT a -> (getConstant a) `seq` (Constant ())
+    OR a b -> (getConstant a) `seq` (getConstant b) `seq` (Constant ())
+    AND a b -> (getConstant a) `seq` (getConstant b) `seq` (Constant ())
 
 instance Render TruthF where
   render = \case
@@ -363,6 +407,12 @@ data NumF r a where
   INT    :: Int -> NumF r Int
   ADD    :: r Int -> r Int -> NumF r Int
   ISZERO :: r Int -> NumF r Bool
+
+instance Forced NumF where
+  forced = \case
+    INT i -> i `seq` (Constant ())
+    ADD a b -> (getConstant a) `seq` (getConstant b) `seq` (Constant ())
+    ISZERO a -> (getConstant a) `seq` (Constant ())
 
 instance Functor1 NumF where
   map1 f = \case
