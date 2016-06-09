@@ -16,8 +16,9 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE DeriveGeneric, DeriveAnyClass #-}
 
-module Exp where
+-- module Exp where
 
 import Variants
 
@@ -31,20 +32,24 @@ import Data.Maybe (fromJust)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Criterion.Main
+import GHC.Generics (Generic)
+import Control.DeepSeq
 
+-- This generates a series of nested `let` expressions, desugars all of them,
+-- and converts the resulting expression to a string.
 main :: IO ()
 main = defaultMain [
         bgroup "generic"
-        [ bench "10"  $ nf genericBench 10
-        , bench "50"  $ nf genericBench 50
-        , bench "100" $ nf genericBench 100
-        , bench "200" $ nf genericBench 200
+        [ bench "100"  $ nf renderAll $ genericBench 100
+        , bench "500"  $ nf renderAll $ genericBench 500
+        , bench "1000" $ nf renderAll $ genericBench 1000
+        , bench "2000" $ nf renderAll $ genericBench 2000
         ]
        , bgroup "oneADT"
-        [ bench "10"  $ nf oneBench 10
-        , bench "50"  $ nf oneBench 50
-        , bench "100" $ nf oneBench 100
-        , bench "200" $ nf oneBench 200
+        [ bench "100"  $ nf show $ oneBench 100
+        , bench "500"  $ nf show $ oneBench 500
+        , bench "1000" $ nf show $ oneBench 1000
+        , bench "2000" $ nf show $ oneBench 2000
         ]        
        ]
 
@@ -57,7 +62,8 @@ genericBench i = desugarLet $ buildExpr i
 
 data OneADT = OLamb String OneADT | OLet String OneADT OneADT |
               OApply OneADT OneADT | ODub OneADT | OInt Int | OVar String
-
+              deriving Show
+                       
 buildOneADT :: Int -> OneADT
 buildOneADT 0 = OLet "x" (OInt 0) (OVar "x")
 buildOneADT i = OLet "z" (OInt i) (buildOneADT (i - 1))
@@ -117,19 +123,19 @@ swapAdd = everywhere
     ADD x y -> Add y x
   $ PassRec
 
--- class Render (f :: (* -> *) -> * -> *) where
---   render :: f (Constant ShowS) a -> Constant ShowS a
+class Render (f :: (* -> *) -> * -> *) where
+  render :: f (Constant ShowS) a -> Constant ShowS a
 
--- renderAll :: (All Render fs, All Functor1 fs) => Rec fs a -> String
--- renderAll = ($ "") . getConstant . byClass (undefined :: prx Render) render
+renderAll :: (All Render fs, All Functor1 fs) => Rec fs a -> String
+renderAll = ($ "") . getConstant . byClass (undefined :: prx Render) render
 
--- byClass :: forall prx c fs r a. (All c fs, All Functor1 fs) => prx c -> (forall f x. c f => f r x -> r x) -> Rec fs a -> r a
--- byClass p f = go . map1 (byClass p f) . unroll
---   where
---   go :: forall gs x. All c gs => Variants gs r x -> r x
---   go = \case
---     L a -> f a
---     R b -> go b
+byClass :: forall prx c fs r a. (All c fs, All Functor1 fs) => prx c -> (forall f x. c f => f r x -> r x) -> Rec fs a -> r a
+byClass p f = go . map1 (byClass p f) . unroll
+  where
+  go :: forall gs x. All c gs => Variants gs r x -> r x
+  go = \case
+    L a -> f a
+    R b -> go b
 
 -- data Val :: * where
 --   Val :: Typeable a => a -> Val
@@ -269,18 +275,18 @@ data LamF r a where
       => String -> r b -> LamF r (a -> b)
   APP :: r (a -> b) -> r a -> LamF r b
 
--- instance Render LamF where
---   render = \case
---     VAR x    -> Constant $ showString x
---     LAM x b -> Constant $ showParen True
---       $ showChar '\\'
---       . showString x
---       . showString " -> "
---       . getConstant b
---     APP a b -> Constant $ showParen True
---       $ getConstant a
---       . showChar ' '
---       . getConstant b
+instance Render LamF where
+  render = \case
+    VAR x    -> Constant $ showString x
+    LAM x b -> Constant $ showParen True
+      $ showChar '\\'
+      . showString x
+      . showString " -> "
+      . getConstant b
+    APP a b -> Constant $ showParen True
+      $ getConstant a
+      . showChar ' '
+      . getConstant b
 
 instance Functor1 LamF where
   map1 f = \case
@@ -291,14 +297,14 @@ instance Functor1 LamF where
 data LetF r a where
   LET :: Typeable a => String -> r a -> r b -> LetF r b
 
--- instance Render LetF where
---   render (LET x a b) = Constant $ showParen True
---     $ showString "let "
---     . showString x
---     . showString " = "
---     . getConstant a
---     . showString " in "
---     . getConstant b
+instance Render LetF where
+  render (LET x a b) = Constant $ showParen True
+    $ showString "let "
+    . showString x
+    . showString " = "
+    . getConstant a
+    . showString " in "
+    . getConstant b
 
 instance Functor1 LetF where
   map1 f (LET x a b) = LET x (f a) (f b)
@@ -310,16 +316,16 @@ data TruthF r a where
   OR   :: r Bool -> r Bool -> TruthF r Bool
   AND  :: r Bool -> r Bool -> TruthF r Bool
 
--- instance Render TruthF where
---   render = \case
---     IF t c a -> Constant $ showParen True
---       $ showString "if "
---       . getConstant t
---       . showString " then "
---       . getConstant c
---       . showString " else "
---       . getConstant a
---     BOOL b -> Constant $ shows b
+instance Render TruthF where
+  render = \case
+    IF t c a -> Constant $ showParen True
+      $ showString "if "
+      . getConstant t
+      . showString " then "
+      . getConstant c
+      . showString " else "
+      . getConstant a
+    BOOL b -> Constant $ shows b
 
 instance Functor1 TruthF where
   map1 f = \case
@@ -337,16 +343,16 @@ instance Functor1 NumF where
     ADD x y  -> ADD (f x) (f y)
     ISZERO x -> ISZERO (f x)
 
--- instance Render NumF where
---   render = \case
---     INT i    -> Constant $ shows i
---     ADD x y  -> Constant $ showParen True
---       $ getConstant x
---       . showString " + "
---       . getConstant y
---     ISZERO x -> Constant $ showParen True
---       $ showString "isZero "
---       . getConstant x
+instance Render NumF where
+  render = \case
+    INT i    -> Constant $ shows i
+    ADD x y  -> Constant $ showParen True
+      $ getConstant x
+      . showString " + "
+      . getConstant y
+    ISZERO x -> Constant $ showParen True
+      $ showString "isZero "
+      . getConstant x
 
 
 data DubF r a where
@@ -355,10 +361,10 @@ data DubF r a where
 instance Functor1 DubF where
   map1 f (DUB x) = DUB (f x)
 
--- instance Render DubF where
---   render (DUB x) = Constant $ showParen True
---     $ showString "dub "
---     . getConstant x
+instance Render DubF where
+  render (DUB x) = Constant $ showParen True
+    $ showString "dub "
+    . getConstant x
 
 type L1 = '[DubF,LamF,LetF,TruthF,NumF]
 type L2 = '[LamF,LetF,TruthF,NumF]
