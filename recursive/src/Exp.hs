@@ -33,33 +33,44 @@ import qualified Data.Set as Set
 
 desugarDub ::
   ( Functors1 l_1
-  , Remove DubF l_1 l_2
+  , Without DubF l_1 l_2
   , NumF ∈ l_2
   ) => Rec l_1 a -> Rec l_2 a
-desugarDub = everywhere
+desugarDub = matchRec
+  $ ElimRec ? \case
+    DUB x -> Add x x
+  $ PassRec
+
+desugarDub' ::
+  ( All Functor1 l_1
+  , Without DubF l_1 l_2
+  , l_2 ⊆ l_3
+  , NumF ∈ l_3
+  ) => Rec l_1 a -> Rec l_3 a
+desugarDub' = matchRec
   $ ElimRec ? \case
     DUB x -> Add x x
   $ PassRec
 
 desugarLet ::
   ( Functors1 l_1
-  , Remove LetF l_1 l_2
+  , Without LetF l_1 l_2
   , LamF ∈ l_2
   ) => Rec l_1 a -> Rec l_2 a
-desugarLet = everywhere
+desugarLet = matchRec
   $ ElimRec ? \case
     LET x a b -> App (Lam x b) a
   $ PassRec
 
 desugarDubLet ::
   ( Functors1 l_1
-  , Remove DubF l_1 l_2
-  , Remove LetF l_2 l_3
+  , Without DubF l_1 l_2
+  , Without LetF l_2 l_3
   , LamF ∈ l_3
   , NumF ∈ l_3
   ) => Rec l_1 a -> Rec l_3 a
 -- desugarDubLet :: Exp1 a -> Exp3 a
-desugarDubLet = everywhere
+desugarDubLet = matchRec
   $ ElimRec ? \case
     DUB x -> Add x x
   $ ElimRec ? \case
@@ -70,7 +81,7 @@ swapAdd ::
   ( All Functor1 l
   , NumF ∈ l
   ) => Rec l a -> Rec l a
-swapAdd = everywhere
+swapAdd = matchRec
   $ MatchRec ? \case
     ADD x y -> Add y x
   $ PassRec
@@ -104,7 +115,7 @@ eval e = case eval' e of
   Ev a -> a $ const Nothing
 
 eval' :: Exp1 a -> Rec '[Eval] a
-eval' = everywhere
+eval' = matchRec
   $ ElimRec ? \case
     LAM x (Ev b)      -> Ev $ \k a -> b $ \y -> if x == y then cast a else k y
     APP (Ev a) (Ev b) -> Ev $ \k -> a k (b k)
@@ -124,7 +135,8 @@ eval' = everywhere
   $ TotalRec
 
 subst ::
-  ( LamF ∈ l
+  ( All Functor1 l
+  , LamF ∈ l
   , Typeable b
   ) => String -> Rec l b
     -> Rec l a -> Rec l a
@@ -140,7 +152,7 @@ beta ::
   ( All Functor1 l
   , LamF ∈ l
   ) => Rec l a -> Rec l a
-beta = everywhere
+beta = matchRec
   $ MatchRec ? \case
     APP (Lam x b) a -> subst x a b
     e               -> injRec e
@@ -163,7 +175,7 @@ eta ::
   , All Functor1 l
   , LamF ∈ l
   ) => Rec l a -> Rec l a
-eta = everywhere
+eta = matchRec
   $ MatchRec ? \case
     LAM x (App t (Var y))
        | x == y
@@ -174,10 +186,11 @@ eta = everywhere
 -}
 
 constProp ::
-  ( '[NumF,TruthF] ⊆ l
+  ( NumF ∈ l
+  , TruthF ∈ l
   , All Functor1 l
   ) => Rec l a -> Rec l a
-constProp = everywhere
+constProp = matchRec
   $ MatchRec ? \case
     ADD (Int x) (Int y) -> Int $ x + y
     e                   -> injRec e
@@ -367,6 +380,7 @@ pattern Not x <- (prjRec -> Just (NOT x))
   where
   Not x = injRec $ NOT x
 
+-- pattern Lam :: (a ~ (b -> c), Typeable b) => (LamF ∈ fs) => String -> Rec fs c -> Rec fs a
 pattern Lam x b <- (prjRec -> Just (LAM x b))
   where
   Lam x b = injRec $ LAM x b
