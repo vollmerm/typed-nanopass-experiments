@@ -215,27 +215,27 @@ match' = \case
   Pass       -> Roll . variants (fix1 $ \rec -> boilerplate rec)
   Else f     -> f
 
-matchRec :: All Functor1 fs => MatchRec fs gs -> Rec fs a -> Rec gs a
-matchRec c = unroll >>> map1 (matchRec c) >>> matchRec' c
+everywhere :: All Functor1 fs => MatchRec fs gs -> Rec fs a -> Rec gs a
+everywhere c = unroll >>> map1 (everywhere c) >>> everywhere' c
 
 data WitAll (c :: k -> Constraint) :: [k] -> * where
   WitAll :: { getWitAll :: Wit (All c as) }
          -> WitAll c as
 
-matchRec' :: forall fs gs a. All Functor1 fs => MatchRec fs gs -> Variants fs (Rec gs) a -> Rec gs a
-matchRec' = \case
+everywhere' :: forall fs gs a. All Functor1 fs => MatchRec fs gs -> Variants fs (Rec gs) a -> Rec gs a
+everywhere' = \case
   PassRec       -> Roll . variants id
   TotalRec      -> emptyVariants
   ElimRec (f :: forall x. f (Rec gs) x -> Rec gs x) (fs :: MatchRec hs gs) ->
-    elimVariant f $ matchRec' fs \\ getWitAll w'
+    elimVariant f $ everywhere' fs \\ getWitAll w'
     where
     w :: WitAll Functor1 fs
     w = WitAll Wit
     w' :: WitAll Functor1 hs
     w' = remWit (without :: Rem f fs hs) w
    -- (f :: forall x. f  fs -> case remWit _ (Wit :: Wit (All Functor1 fs)) of
-   -- Wit -> elimVariant f $ matchRec' fs
-  MatchRec f fs -> replaceAt1 f (matchRec' fs) elemIndex
+   -- Wit -> elimVariant f $ everywhere' fs
+  MatchRec f fs -> replaceAt1 f (everywhere' fs) elemIndex
   ElseRec  f    -> f
 
 foldRec1 :: All Functor1 fs => (forall f x. Index fs f -> f r x -> r x) -> Rec fs a -> r a

@@ -16,8 +16,9 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE DeriveGeneric, DeriveAnyClass #-}
 
-module Exp where
+-- module Exp where
 
 import Variants
 
@@ -30,24 +31,103 @@ import Data.Typeable
 import Data.Maybe (fromJust)
 import Data.Set (Set)
 import qualified Data.Set as Set
+import Criterion.Main
+import GHC.Generics (Generic)
+import Control.DeepSeq
 
+
+-- This generates a series of nested `let` expressions, desugars all of them,
+-- and converts the resulting expression to a string.
+main :: IO ()
+main = defaultMain [
+        bgroup "generic"
+        [ bench "10"  $ nf forceAll $ genericBench 10
+        , bench "50"  $ nf forceAll $ genericBench 50
+        , bench "100"  $ nf forceAll $ genericBench 100
+        , bench "500"  $ nf forceAll $ genericBench 500
+        , bench "1000" $ nf forceAll $ genericBench 1000
+        ]
+       , bgroup "oneADT"
+        [ bench "10"  $ nf oneBench 10
+        , bench "50"  $ nf oneBench 50
+        , bench "100"  $ nf oneBench 100
+        , bench "500"  $ nf oneBench 500
+        , bench "1000" $ nf oneBench 1000
+        ]        
+       ]
+
+-- forceAll = undefined
+
+buildExpr :: Int -> Exp2 Int
+buildExpr 0 = Let "x" (Int 0) (Var "x")
+buildExpr i = Let "z" (Int i) (buildExpr (i - 1))
+
+genericBench i = genericBench' i
+
+genericBench' :: Int -> Exp3 Int
+genericBench' i = desugarLet $ buildExpr i
+
+data OneADT = OLamb String OneADT | OLet String OneADT OneADT |
+              OApply OneADT OneADT | ODub OneADT | OAdd OneADT OneADT |
+              OInt Int | OVar String
+              deriving (Show, Generic, NFData)
+                       
+-- renderOne e = (renderOne' e) ""
+
+-- renderOne' :: OneADT -> ShowS
+-- renderOne' (OLamb v e) = showParen True
+--                        $ showChar '\\'
+--                        . showString v
+--                        . showString " -> "
+--                        . renderOne' e
+-- renderOne' (OLet v e1 e2) = showParen True
+--                          $ showString "let "
+--                          . showString v
+--                          . showString " = "
+--                          . renderOne' e1
+--                          . showString " in "
+--                          . renderOne' e2
+-- renderOne' (OApply e1 e2) = showParen True
+--                          $ renderOne' e1
+--                          . showChar ' '
+--                          . renderOne' e2
+-- renderOne' (ODub e) = showParen True
+--                    $ showString "dub "
+--                    . renderOne' e
+-- renderOne' (OInt i) = shows i
+-- renderOne' (OVar v) = shows v
+
+buildOneADT :: Int -> OneADT
+buildOneADT 0 = OLet "x" (OInt 0) (OVar "x")
+buildOneADT i = OLet "z" (OInt i) (buildOneADT (i - 1))
+
+oneBench :: Int -> OneADT
+oneBench i = oneDesugarLet $ buildOneADT i
+
+oneDesugarDub :: OneADT -> OneADT
+oneDesugarDub (OLamb v e) = OLamb v (oneDesugarDub e)
+oneDesugarDub (OLet v e1 e2) = OLet v (oneDesugarDub e1) (oneDesugarDub e2)
+oneDesugarDub (OApply e1 e2) = OApply (oneDesugarDub e1) (oneDesugarDub e2)
+oneDesugarDub (ODub e) = let e' = (oneDesugarDub e) in OAdd e e
+oneDesugarDub (OAdd e1 e2) = OAdd (oneDesugarDub e1) (oneDesugarDub e2)
+oneDesugarDub (OInt i) = OInt i
+oneDesugarDub (OVar s) = OVar s
+
+oneDesugarLet :: OneADT -> OneADT
+oneDesugarLet (OLamb v e) = OLamb v (oneDesugarLet e)
+oneDesugarLet (OLet v e1 e2) = OApply (OLamb v (oneDesugarLet e2)) (oneDesugarLet e1)
+oneDesugarLet (OApply e1 e2) = OApply (oneDesugarLet e1) (oneDesugarLet e2)
+oneDesugarLet (ODub e) = error "Impossible"
+oneDesugarLet (OAdd e1 e2) = OAdd (oneDesugarDub e1) (oneDesugarDub e2)
+oneDesugarLet (OInt i) = OInt i
+oneDesugarLet (OVar s) = OVar s
+       
 desugarDub ::
   ( Functors1 l_1
   , Without DubF l_1 l_2
   , NumF ∈ l_2
   ) => Rec l_1 a -> Rec l_2 a
 desugarDub = everywhere
-  $ ElimRec ? \case
-    DUB x -> Add x x
-  $ PassRec
-
-desugarDub' :: Rec '[DubF] a -> Rec '[NumF] a
-  -- ( All Functor1 l_1
-  -- , Without DubF l_1 l_2
-  -- , l_2 ⊆ l_3
-  -- , NumF ∈ l_3
-  -- ) => Rec l_1 a -> Rec l_3 a
-desugarDub' = everywhere
   $ ElimRec ? \case
     DUB x -> Add x x
   $ PassRec
@@ -86,8 +166,19 @@ swapAdd = everywhere
     ADD x y -> Add y x
   $ PassRec
 
+-- data Unit a = Unit deriving (Show)
+
+-- instance Functor Unit where
+--     fmap _ _    = Unit
+
+class Forced (f :: (* -> *) -> * -> *) where
+  forced :: f (Constant ()) a -> Constant () a
+
 class Render (f :: (* -> *) -> * -> *) where
   render :: f (Constant ShowS) a -> Constant ShowS a
+
+forceAll :: (All Forced fs, All Functor1 fs) => Rec fs a -> ()
+forceAll = getConstant . byClass (undefined :: prx Forced) forced
 
 renderAll :: (All Render fs, All Functor1 fs) => Rec fs a -> String
 renderAll = ($ "") . getConstant . byClass (undefined :: prx Render) render
@@ -100,74 +191,73 @@ byClass p f = go . map1 (byClass p f) . unroll
     L a -> f a
     R b -> go b
 
-data Val :: * where
-  Val :: Typeable a => a -> Val
+-- data Val :: * where
+--   Val :: Typeable a => a -> Val
 
-data Eval :: (* -> *) -> * -> * where
-  EV :: ((forall x. Typeable x => String -> Maybe x) -> a) -> Eval r a
+-- data Eval :: (* -> *) -> * -> * where
+--   EV :: ((forall x. Typeable x => String -> Maybe x) -> a) -> Eval r a
 
-pattern Ev f <- (prjRec -> Just (EV f))
-  where
-  Ev f = injRec $ EV f
+-- pattern Ev f <- (prjRec -> Just (EV f))
+--   where
+--   Ev f = injRec $ EV f
 
-eval :: Exp1 a -> a
-eval e = case eval' e of
-  Ev a -> a $ const Nothing
+-- eval :: Exp1 a -> a
+-- eval e = case eval' e of
+--   Ev a -> a $ const Nothing
 
-eval' :: Exp1 a -> Rec '[Eval] a
-eval' = everywhere
-  $ ElimRec ? \case
-    LAM x (Ev b)      -> Ev $ \k a -> b $ \y -> if x == y then cast a else k y
-    APP (Ev a) (Ev b) -> Ev $ \k -> a k (b k)
-    VAR x             -> Ev $ \k -> case k x of
-      Just v -> v
-      _      -> error $ "unbound variable: " ++ x
-  $ ElimRec ? \case
-    DUB (Ev x)        -> Ev $ \k -> x k + x k
-  $ ElimRec ? \case
-    IF (Ev t) (Ev c) (Ev a) -> Ev $ \k -> if t k then c k else a k
-  $ ElimRec ? \case
-    LET x (Ev a) (Ev b) -> Ev $ \k -> b $ \y -> if x == y then cast (a k) else k y
-  $ ElimRec ? \case
-    INT i             -> Ev $ \_ -> i
-    ADD (Ev x) (Ev y) -> Ev $ \k -> x k + y k
-    ISZERO (Ev x)     -> Ev $ \k -> x k == 0
-  $ TotalRec
+-- eval' :: Exp1 a -> Rec '[Eval] a
+-- eval' = everywhere
+--   $ ElimRec ? \case
+--     LAM x (Ev b)      -> Ev $ \k a -> b $ \y -> if x == y then cast a else k y
+--     APP (Ev a) (Ev b) -> Ev $ \k -> a k (b k)
+--     VAR x             -> Ev $ \k -> case k x of
+--       Just v -> v
+--       _      -> error $ "unbound variable: " ++ x
+--   $ ElimRec ? \case
+--     DUB (Ev x)        -> Ev $ \k -> x k + x k
+--   $ ElimRec ? \case
+--     IF (Ev t) (Ev c) (Ev a) -> Ev $ \k -> if t k then c k else a k
+--   $ ElimRec ? \case
+--     LET x (Ev a) (Ev b) -> Ev $ \k -> b $ \y -> if x == y then cast (a k) else k y
+--   $ ElimRec ? \case
+--     INT i             -> Ev $ \_ -> i
+--     ADD (Ev x) (Ev y) -> Ev $ \k -> x k + y k
+--     ISZERO (Ev x)     -> Ev $ \k -> x k == 0
+--   $ TotalRec
 
-subst ::
-  ( All Functor1 l
-  , LamF ∈ l
-  , Typeable b
-  ) => String -> Rec l b
-    -> Rec l a -> Rec l a
-subst x v = match
-  $ Match ?? \case
-    VAR y
-      | x == y
-      , Just v' <- gcast v -> v'
-      | otherwise -> Var y
-  $ Pass
+-- subst ::
+--   ( LamF ∈ l
+--   , Typeable b
+--   ) => String -> Rec l b
+--     -> Rec l a -> Rec l a
+-- subst x v = match
+--   $ Match ?? \case
+--     VAR y
+--       | x == y
+--       , Just v' <- gcast v -> v'
+--       | otherwise -> Var y
+--   $ Pass
 
-beta ::
-  ( All Functor1 l
-  , LamF ∈ l
-  ) => Rec l a -> Rec l a
-beta = everywhere
-  $ MatchRec ? \case
-    APP (Lam x b) a -> subst x a b
-    e               -> injRec e
-  $ PassRec
+-- beta ::
+--   ( All Functor1 l
+--   , LamF ∈ l
+--   ) => Rec l a -> Rec l a
+-- beta = everywhere
+--   $ MatchRec ? \case
+--     APP (Lam x b) a -> subst x a b
+--     e               -> injRec e
+--   $ PassRec
 
-freeVars ::
-  ( LamF ∈ l
-  , All HFoldable l
-  ) => Rec l a -> Set String
-freeVars = match
-  $ Match ?? \case
-    VAR x   -> Set.singleton x
-    LAM x b -> Set.delete x (freeVars b)
-    APP a b -> Set.union (freeVars a) (freeVars b)
-  $ Else $ hfoldMap freeVars
+-- freeVars ::
+--   ( LamF ∈ l
+--   , All HFoldable l
+--   ) => Rec l a -> Set String
+-- freeVars = match
+--   $ Match ?? \case
+--     VAR x   -> Set.singleton x
+--     LAM x b -> Set.delete x (freeVars b)
+--     APP a b -> Set.union (freeVars a) (freeVars b)
+--   $ Else $ hfoldMap freeVars
 
 {-
 eta ::
@@ -185,22 +275,21 @@ eta = everywhere
   $ PassRec
 -}
 
-constProp ::
-  ( NumF ∈ l
-  , TruthF ∈ l
-  , All Functor1 l
-  ) => Rec l a -> Rec l a
-constProp = everywhere
-  $ MatchRec ? \case
-    ADD (Int x) (Int y) -> Int $ x + y
-    e                   -> injRec e
-  $ MatchRec ? \case
-    IF  (Bool b) c a      -> if b then c else a
-    AND (Bool p) (Bool q) -> Bool $ p && q
-    OR  (Bool p) (Bool q) -> Bool $ p || q
-    NOT (Bool p)          -> Bool $ not p
-    e -> injRec e
-  $ PassRec
+-- constProp ::
+--   ( '[NumF,TruthF] ⊆ l
+--   , All Functor1 l
+--   ) => Rec l a -> Rec l a
+-- constProp = everywhere
+--   $ MatchRec ? \case
+--     ADD (Int x) (Int y) -> Int $ x + y
+--     e                   -> injRec e
+--   $ MatchRec ? \case
+--     IF  (Bool b) c a      -> if b then c else a
+--     AND (Bool p) (Bool q) -> Bool $ p && q
+--     OR  (Bool p) (Bool q) -> Bool $ p || q
+--     NOT (Bool p)          -> Bool $ not p
+--     e -> injRec e
+--   $ PassRec
 
 -- type is inferred with NoMonomorphismRestriction
 -- e1 :: ('[LamF,DubF] ⊆ l_1) => Rec l_1 (a -> Int)
@@ -212,9 +301,6 @@ e1' = desugarDub e1
 
 e2 :: Exp1 Int
 e2 = Let "x" (Int 3) (Dub (Var "x"))
-
-e3 :: Exp2 Int
-e3 = Let "x" (Int 3) (Let "y" (Int 2) (Var "y"))
 
 data VarsF :: (* -> *) -> * -> * where
   VARS :: Set String -> VarsF r a
@@ -243,6 +329,12 @@ data LamF r a where
       => String -> r b -> LamF r (a -> b)
   APP :: r (a -> b) -> r a -> LamF r b
 
+instance Forced LamF where
+  forced = \case
+    VAR x -> x `seq` (Constant ())
+    LAM x b -> x `seq` (getConstant b) `seq` (Constant ())
+    APP x y -> (getConstant x) `seq` (getConstant y) `seq` (Constant())
+
 instance Render LamF where
   render = \case
     VAR x    -> Constant $ showString x
@@ -265,6 +357,9 @@ instance Functor1 LamF where
 data LetF r a where
   LET :: Typeable a => String -> r a -> r b -> LetF r b
 
+instance Forced LetF where
+  forced (LET x a b) = x `seq` (getConstant a) `seq` (getConstant b) `seq` (Constant ())
+
 instance Render LetF where
   render (LET x a b) = Constant $ showParen True
     $ showString "let "
@@ -283,6 +378,14 @@ data TruthF r a where
   NOT  :: r Bool -> TruthF r Bool
   OR   :: r Bool -> r Bool -> TruthF r Bool
   AND  :: r Bool -> r Bool -> TruthF r Bool
+
+instance Forced TruthF where
+  forced = \case
+    IF a b c -> (getConstant a) `seq` (getConstant b) `seq` (getConstant c) `seq` (Constant ())
+    BOOL b -> b `seq` (Constant ())
+    NOT a -> (getConstant a) `seq` (Constant ())
+    OR a b -> (getConstant a) `seq` (getConstant b) `seq` (Constant ())
+    AND a b -> (getConstant a) `seq` (getConstant b) `seq` (Constant ())
 
 instance Render TruthF where
   render = \case
@@ -304,6 +407,12 @@ data NumF r a where
   INT    :: Int -> NumF r Int
   ADD    :: r Int -> r Int -> NumF r Int
   ISZERO :: r Int -> NumF r Bool
+
+instance Forced NumF where
+  forced = \case
+    INT i -> i `seq` (Constant ())
+    ADD a b -> (getConstant a) `seq` (getConstant b) `seq` (Constant ())
+    ISZERO a -> (getConstant a) `seq` (Constant ())
 
 instance Functor1 NumF where
   map1 f = \case
@@ -383,7 +492,6 @@ pattern Not x <- (prjRec -> Just (NOT x))
   where
   Not x = injRec $ NOT x
 
--- pattern Lam :: (a ~ (b -> c), Typeable b) => (LamF ∈ fs) => String -> Rec fs c -> Rec fs a
 pattern Lam x b <- (prjRec -> Just (LAM x b))
   where
   Lam x b = injRec $ LAM x b

@@ -15,12 +15,26 @@ build-type:          Simple
 -- extra-source-files:  
 cabal-version:       >=1.10
 
-library
+library 
   exposed-modules:
     Exp
     Variants
   -- other-modules:       
   -- other-extensions:    
+  build-depends:
+                    base >=4.8 && <4.9
+                , containers
+                , criterion >= 1.1.1.0
+                , deepseq >= 1.4.1.1
+                , mtl
+                , pretty-show
+                , transformers
+                , type-combinators
+  hs-source-dirs:      src
+  default-language:    Haskell2010
+
+benchmark letbench
+  type: exitcode-stdio-1.0
   build-depends:
     base >=4.8 && <4.9,
     containers,
@@ -28,6 +42,9 @@ library
     transformers,
     type-combinators,
     pretty-show,
-    template-haskell
-  hs-source-dirs:      src
-  default-language:    Haskell2010
+    recursive,
+    criterion,
+    deepseq
+  main-is: Bench.hs
+  ghc-options: -Wall -O2
+  default-language: Haskell2010
